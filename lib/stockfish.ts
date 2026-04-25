@@ -9,14 +9,27 @@ export type StockfishLine = {
 type EngineCallbacks = {
   onLine?: (line: StockfishLine) => void;
   onBestMove?: (move: string) => void;
+  onStatus?: (status: string) => void;
+};
+
+export type EngineMove = {
+  from: string;
+  to: string;
+  san?: string;
+  captured?: string;
+  promotion?: string;
 };
 
 export function createStockfish(callbacks: EngineCallbacks = {}) {
   if (typeof window === "undefined") return null;
-  const worker = new Worker("/stockfish-worker.js");
+  const worker = new Worker("/stockfish-worker.js?v=2");
 
   worker.onmessage = (event: MessageEvent<string>) => {
     const text = event.data;
+    if (text === "uciok" || text === "readyok") {
+      callbacks.onStatus?.("ready");
+      return;
+    }
     if (text.startsWith("bestmove")) {
       callbacks.onBestMove?.(text.split(" ")[1]);
       return;
@@ -34,12 +47,16 @@ export function createStockfish(callbacks: EngineCallbacks = {}) {
     }
   };
 
+  worker.onerror = () => {
+    callbacks.onStatus?.("engine error");
+  };
+
   worker.postMessage("uci");
   worker.postMessage("isready");
 
   return {
-    bestMove(fen: string, depth = 10) {
-      worker.postMessage(`position fen ${fen}`);
+    bestMove(fen: string, depth = 10, moves: EngineMove[] = []) {
+      worker.postMessage({ type: "position", fen, moves });
       worker.postMessage(`go depth ${depth}`);
     },
     stop() {

@@ -51,6 +51,25 @@ export type LeaderboardPlayer = {
   score: number;
 };
 
+export type SavedMove = {
+  ply: number;
+  san: string;
+  uci: string;
+  color: "w" | "b";
+  fenBefore: string;
+  fenAfter: string;
+};
+
+export type SavedGame = {
+  id: string;
+  opponent: string;
+  result: string;
+  scoreDelta: number;
+  pgn: string;
+  fenHistory: string;
+  createdAt?: { seconds: number };
+};
+
 export function useFirebaseUser() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -103,14 +122,18 @@ export async function saveGameRecord(input: {
   opponent: string;
   pgn: string;
   result: string;
-  moves: string[];
+  fenHistory: string;
+  finalFen: string;
+  scoreDelta: number;
 }) {
   if (!db || !input.userId) return;
   await addDoc(collection(db, "users", input.userId, "games"), {
     opponent: input.opponent,
     pgn: input.pgn,
     result: input.result,
-    moves: input.moves,
+    fenHistory: input.fenHistory,
+    finalFen: input.finalFen,
+    scoreDelta: input.scoreDelta,
     createdAt: serverTimestamp()
   });
 }
@@ -136,15 +159,35 @@ export function useLeaderboard(city?: string) {
   useEffect(() => {
     if (!db) return;
     const q = city
-      ? query(collection(db, "leaderboard"), where("cityKey", "==", city.toLowerCase()), orderBy("score", "desc"), limit(10))
+      ? query(collection(db, "leaderboard"), where("cityKey", "==", city.toLowerCase()), limit(25))
       : query(collection(db, "leaderboard"), orderBy("score", "desc"), limit(10));
     return onSnapshot(q, (snapshot) => {
-      const rows = snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Omit<LeaderboardPlayer, "id">) }));
+      const rows = snapshot.docs
+        .map((entry) => ({ id: entry.id, ...(entry.data() as Omit<LeaderboardPlayer, "id">) }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 10);
       setPlayers(rows);
     });
   }, [city]);
 
   return players;
+}
+
+export function useSavedGames(userId?: string) {
+  const [games, setGames] = useState<SavedGame[]>([]);
+
+  useEffect(() => {
+    if (!db || !userId) {
+      setGames([]);
+      return;
+    }
+    const q = query(collection(db, "users", userId, "games"), orderBy("createdAt", "desc"));
+    return onSnapshot(q, (snapshot) => {
+      setGames(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Omit<SavedGame, "id">) })));
+    });
+  }, [userId]);
+
+  return games;
 }
 
 export async function markPro(userId?: string) {

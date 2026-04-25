@@ -24,7 +24,7 @@ const stripe = stripeSecret ? new Stripe(stripeSecret) : null;
 
 app.use(
   cors({
-    origin: process.env.CLIENT_ORIGIN || "http://localhost:3000"
+    origin: process.env.CLIENT_ORIGIN || "http://localhost:3001"
   })
 );
 
@@ -65,7 +65,7 @@ app.post("/api/stripe/create-checkout-session", async (request, response) => {
       return;
     }
 
-    const origin = process.env.CLIENT_ORIGIN || "http://localhost:3000";
+    const origin = process.env.CLIENT_ORIGIN || "http://localhost:3001";
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       line_items: [{ price: process.env.STRIPE_PRICE_ID, quantity: 1 }],
