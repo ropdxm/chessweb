@@ -1,10 +1,13 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import cors from "cors";
 import express from "express";
 import http from "http";
 import Stripe from "stripe";
 import { WebSocket, WebSocketServer } from "ws";
 import { Chess } from "chess.js";
+
+dotenv.config({ path: ".env.local" });
+dotenv.config();
 
 type Client = WebSocket & { roomId?: string; color?: "w" | "b" };
 
@@ -60,23 +63,34 @@ app.use(express.json());
 
 app.post("/api/stripe/create-checkout-session", async (request, response) => {
   try {
-    if (!stripe || !process.env.STRIPE_PRICE_ID) {
-      response.status(501).json({ error: "Stripe is not configured" });
+    if (!stripeSecret?.startsWith("sk_")) {
+      response.status(501).json({ error: "STRIPE_SECRET_KEY must start with sk_test_ or sk_live_." });
+      return;
+    }
+    if (!process.env.STRIPE_PRICE_ID?.startsWith("price_")) {
+      response.status(501).json({ error: "STRIPE_PRICE_ID must start with price_." });
+      return;
+    }
+    if (!stripe) {
+      response.status(501).json({ error: "Stripe is not configured." });
       return;
     }
 
     const origin = process.env.CLIENT_ORIGIN || "http://localhost:3001";
+    const returnPath = typeof request.body.returnPath === "string" ? request.body.returnPath : "/pro";
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       line_items: [{ price: process.env.STRIPE_PRICE_ID, quantity: 1 }],
-      success_url: `${origin}?checkout=success`,
-      cancel_url: `${origin}?checkout=cancelled`,
+      success_url: `${origin}${returnPath}?checkout=success`,
+      cancel_url: `${origin}${returnPath}?checkout=cancelled`,
       client_reference_id: request.body.userId
     });
 
     response.json({ sessionId: session.id, url: session.url });
   } catch (error) {
-    response.status(500).json({ error: error instanceof Error ? error.message : "Stripe checkout failed" });
+    const message = error instanceof Error ? error.message : "Stripe checkout failed";
+    console.error("Stripe checkout failed:", message);
+    response.status(500).json({ error: message });
   }
 });
 

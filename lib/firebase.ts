@@ -3,9 +3,11 @@
 import { initializeApp, getApps } from "firebase/app";
 import {
   GoogleAuthProvider,
+  createUserWithEmailAndPassword,
+  getRedirectResult,
   getAuth,
   onAuthStateChanged,
-  signInAnonymously,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
   type User
@@ -14,6 +16,7 @@ import {
   addDoc,
   collection,
   doc,
+  getDoc,
   getFirestore,
   increment,
   limit,
@@ -70,6 +73,14 @@ export type SavedGame = {
   createdAt?: { seconds: number };
 };
 
+export type UserProfile = {
+  name: string;
+  city: string;
+  cityKey: string;
+  pro?: boolean;
+  pieceStyle?: "classic" | "neo" | "mono";
+};
+
 export function useFirebaseUser() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -79,6 +90,13 @@ export function useFirebaseUser() {
       setLoading(false);
       return;
     }
+    void getRedirectResult(auth)
+      .then((result) => {
+        if (result?.user) setUser(result.user);
+      })
+      .catch((error) => {
+        console.error("Google redirect sign-in failed", error);
+      });
     return onAuthStateChanged(auth, (nextUser) => {
       setUser(nextUser);
       setLoading(false);
@@ -88,14 +106,37 @@ export function useFirebaseUser() {
   return { user, loading };
 }
 
-export async function signInGuest() {
-  if (!auth) return null;
-  return signInAnonymously(auth);
+export function useUserProfile(userId?: string) {
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+
+  useEffect(() => {
+    if (!db || !userId) {
+      setProfile(null);
+      return;
+    }
+    return onSnapshot(doc(db, "users", userId), (snapshot) => {
+      setProfile(snapshot.exists() ? (snapshot.data() as UserProfile) : null);
+    });
+  }, [userId]);
+
+  return profile;
 }
 
 export async function signInGoogle() {
   if (!auth) return null;
-  return signInWithPopup(auth, new GoogleAuthProvider());
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: "select_account" });
+  return signInWithPopup(auth, provider);
+}
+
+export async function signInEmail(email: string, password: string) {
+  if (!auth) return null;
+  return signInWithEmailAndPassword(auth, email, password);
+}
+
+export async function registerEmail(email: string, password: string) {
+  if (!auth) return null;
+  return createUserWithEmailAndPassword(auth, email, password);
 }
 
 export async function signOutUser() {
@@ -105,12 +146,16 @@ export async function signOutUser() {
 
 export async function upsertUserProfile(user: User, city: string) {
   if (!db) return;
+  const existing = await getDoc(doc(db, "users", user.uid));
   await setDoc(
     doc(db, "users", user.uid),
     {
       name: user.displayName || "Guest player",
       city,
       cityKey: city.toLowerCase(),
+      score: existing.exists() ? existing.data().score || 0 : 0,
+      pro: existing.exists() ? Boolean(existing.data().pro) : false,
+      pieceStyle: existing.exists() ? existing.data().pieceStyle || "classic" : "classic",
       lastSeenAt: serverTimestamp()
     },
     { merge: true }
@@ -196,4 +241,16 @@ export async function markPro(userId?: string) {
     pro: true,
     upgradedAt: serverTimestamp()
   });
+}
+
+export async function setUserPieceStyle(userId: string | undefined, pieceStyle: UserProfile["pieceStyle"]) {
+  if (!db || !userId) return;
+  await setDoc(
+    doc(db, "users", userId),
+    {
+      pieceStyle,
+      updatedAt: serverTimestamp()
+    },
+    { merge: true }
+  );
 }

@@ -59,6 +59,9 @@ export function createStockfish(callbacks: EngineCallbacks = {}) {
       worker.postMessage({ type: "position", fen, moves });
       worker.postMessage(`go depth ${depth}`);
     },
+    setSkill(level: number) {
+      worker.postMessage({ type: "skill", level });
+    },
     stop() {
       worker.postMessage("stop");
     },

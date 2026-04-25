@@ -9,6 +9,7 @@ const pieceValues = {
 
 let legalMoves = [];
 let lastFen = "";
+let skill = 3;
 
 function scoreMove(move) {
   let score = 0;
@@ -24,7 +25,14 @@ function scoreMove(move) {
 
 function chooseMove() {
   if (!legalMoves.length) return null;
-  return [...legalMoves].sort((a, b) => scoreMove(b) - scoreMove(a))[0];
+  const sorted = [...legalMoves].sort((a, b) => scoreMove(b) - scoreMove(a));
+  if (skill >= 5) return sorted[0];
+  const poolSize = Math.min(sorted.length, Math.max(2, 7 - skill));
+  const randomChance = Math.max(0.05, 0.45 - skill * 0.07);
+  if (Math.random() < randomChance) {
+    return sorted[Math.floor(Math.random() * poolSize)];
+  }
+  return sorted[Math.min(sorted.length - 1, Math.floor(Math.random() * Math.max(1, 4 - skill)))];
 }
 
 self.onmessage = function onWorkerMessage(event) {
@@ -33,6 +41,11 @@ self.onmessage = function onWorkerMessage(event) {
   if (typeof command === "object" && command?.type === "position") {
     lastFen = command.fen || "";
     legalMoves = Array.isArray(command.moves) ? command.moves : [];
+    return;
+  }
+
+  if (typeof command === "object" && command?.type === "skill") {
+    skill = Math.max(1, Math.min(5, Number(command.level) || 3));
     return;
   }
 
