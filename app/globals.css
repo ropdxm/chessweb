@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 42 22% 96%;
+  --foreground: 216 24% 15%;
+  --card: 0 0% 100%;
+  --card-foreground: 216 24% 15%;
+  --primary: 154 56% 31%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 34 78% 58%;
+  --secondary-foreground: 220 30% 12%;
+  --muted: 42 18% 88%;
+  --muted-foreground: 218 11% 38%;
+  --accent: 205 72% 43%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 72% 50%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 38 16% 78%;
+  --input: 38 16% 78%;
+  --ring: 154 56% 31%;
+}
+
+.dark {
+  --background: 220 22% 10%;
+  --foreground: 42 18% 92%;
+  --card: 220 18% 14%;
+  --card-foreground: 42 18% 92%;
+  --primary: 154 48% 48%;
+  --primary-foreground: 220 30% 10%;
+  --secondary: 35 80% 56%;
+  --secondary-foreground: 220 24% 10%;
+  --muted: 220 14% 22%;
+  --muted-foreground: 42 12% 70%;
+  --accent: 203 78% 58%;
+  --accent-foreground: 220 30% 10%;
+  --destructive: 0 68% 56%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 220 14% 28%;
+  --input: 220 14% 28%;
+  --ring: 154 48% 48%;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  min-height: 100vh;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+button, input, select {
+  font: inherit;
+}
+
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-rows: repeat(8, minmax(0, 1fr));
+}
