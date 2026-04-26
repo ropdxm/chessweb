@@ -5,15 +5,12 @@ import { Chess, type Square } from "chess.js";
 import {
   Bot,
   BrainCircuit,
-  Crown,
   Link as LinkIcon,
   LogIn,
-  LogOut,
-  Moon,
   RotateCcw,
   Save,
+  Search,
   Maximize2,
-  Sun,
   Swords,
   Users
 } from "lucide-react";
@@ -27,7 +24,6 @@ import {
   firebaseEnabled,
   saveGameRecord,
   signInGoogle,
-  signOutUser,
   markPieceStylePurchased,
   setUserPieceStyle,
   setUserLanguage,
@@ -59,7 +55,19 @@ const pieceGlyphs: Record<string, string> = {
   bk: "\u265A"
 };
 
-type PieceStyle = "classic" | "cburnett" | "noto" | "alpha" | "merida";
+type PieceStyle = "classic" | "cburnett" | "noto" | "alpha" | "merida" | "california" | "cardinal" | "pixel";
+const pieceStyleLabels: Record<PieceStyle, string> = {
+  classic: "Classic",
+  cburnett: "Cburnett",
+  noto: "Noto",
+  alpha: "Alpha",
+  merida: "Merida",
+  california: "California",
+  cardinal: "Cardinal",
+  pixel: "Pixel"
+};
+const paidPieceStyles = ["alpha", "merida", "california", "cardinal", "pixel"] as const;
+type PaidPieceStyle = (typeof paidPieceStyles)[number];
 const pieceNames: Record<string, string> = {
   k: "KING",
   q: "QUEEN",
@@ -74,11 +82,18 @@ function normalizePieceStyle(style?: string): PieceStyle {
   if (style === "noto" || style === "mono") return "noto";
   if (style === "alpha") return "alpha";
   if (style === "merida") return "merida";
+  if (style === "california") return "california";
+  if (style === "cardinal") return "cardinal";
+  if (style === "pixel") return "pixel";
   return "classic";
 }
 
+function isPaidPieceStyle(style: PieceStyle): style is PaidPieceStyle {
+  return paidPieceStyles.includes(style as PaidPieceStyle);
+}
+
 function wikimediaPieceUrl(style: PieceStyle, color: "w" | "b", type: string) {
-  if (style === "alpha" || style === "merida") {
+  if (isPaidPieceStyle(style)) {
     return `https://raw.githubusercontent.com/lichess-org/lila/master/public/piece/${style}/${color}${type.toUpperCase()}.svg`;
   }
 
@@ -100,12 +115,14 @@ function ChessPieceIcon({
   color,
   type,
   large = false,
-  style = "classic"
+  style = "classic",
+  preview = false
 }: {
   color: "w" | "b";
   type: string;
   large?: boolean;
   style?: PieceStyle;
+  preview?: boolean;
 }) {
   const source = wikimediaPieceUrl(style, color, type);
   if (source) {
@@ -144,7 +161,7 @@ function ChessPieceIcon({
     <span
       className={cn(
         "flex h-[74%] w-[74%] items-center justify-center leading-none",
-        large ? "text-[clamp(3rem,7vw,5.8rem)]" : "text-[clamp(1.4rem,4vw,3.8rem)]",
+        preview ? "text-[1.3rem]" : large ? "text-[clamp(3rem,7vw,5.8rem)]" : "text-[clamp(1.2rem,3.2vw,3.1rem)]",
         color === "b" ? "text-slate-950" : "text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.7)]"
       )}
     >
@@ -158,9 +175,11 @@ const ranks = ["8", "7", "6", "5", "4", "3", "2", "1"];
 
 type Mode = "local" | "ai" | "online";
 type ServerMessage =
-  | { type: "room-created"; roomId: string; fen: string; color: "w" | "b" }
-  | { type: "joined"; roomId: string; fen: string; color: "w" | "b" }
-  | { type: "state"; fen: string; pgn: string; turn: "w" | "b"; result?: string; moves: string[] }
+  | { type: "room-created"; roomId: string; fen: string; color: "w" | "b"; players?: Partial<Record<"w" | "b", string>> }
+  | { type: "joined"; roomId: string; fen: string; color: "w" | "b"; players?: Partial<Record<"w" | "b", string>> }
+  | { type: "matched"; roomId: string; fen: string; color: "w" | "b"; players?: Partial<Record<"w" | "b", string>> }
+  | { type: "matchmaking-waiting" }
+  | { type: "state"; fen: string; pgn: string; turn: "w" | "b"; result?: string; moves: string[]; players?: Partial<Record<"w" | "b", string>> }
   | { type: "error"; message: string };
 
 type MoveRecord = SavedMove;
@@ -348,7 +367,6 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
   const [mode, setMode] = useState<Mode>(initialMode);
   const [view, setView] = useState<"play" | "profile">(initialView);
   const [city, setCity] = useState("Almaty");
-  const [theme, setTheme] = useState<"light" | "dark">("light");
   const [coachLine, setCoachLine] = useState<StockfishLine | null>(null);
   const [coachText, setCoachText] = useState("");
   const [suggestedMove, setSuggestedMove] = useState<{ from: Square; to: Square } | null>(null);
@@ -358,6 +376,9 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
   const [playerColor, setPlayerColor] = useState<"w" | "b">("w");
   const [aiPlayerColor, setAiPlayerColor] = useState<"w" | "b">("w");
   const [socketStatus, setSocketStatus] = useState("offline");
+  const [onlineGameKind, setOnlineGameKind] = useState<"friend" | "random">("friend");
+  const [matchmaking, setMatchmaking] = useState(false);
+  const [onlinePlayers, setOnlinePlayers] = useState<Partial<Record<"w" | "b", string>>>({});
   const [notice, setNotice] = useState("");
   const [savedGameKey, setSavedGameKey] = useState("");
   const [resultDialog, setResultDialog] = useState<{ title: string; body: string; delta: number } | null>(null);
@@ -377,10 +398,11 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
   const canUseProfileStyle =
     normalizedProfileStyle === "classic" ||
     ((normalizedProfileStyle === "cburnett" || normalizedProfileStyle === "noto") && isPro) ||
-    ((normalizedProfileStyle === "alpha" || normalizedProfileStyle === "merida") && purchasedPieceStyles.includes(normalizedProfileStyle));
+    (isPaidPieceStyle(normalizedProfileStyle) && purchasedPieceStyles.includes(normalizedProfileStyle));
   const pieceStyle = canUseProfileStyle ? normalizedProfileStyle : "classic";
   const activeLanguage: Language = isPro && (profile?.language === "kk" || profile?.language === "ru" || profile?.language === "fr") ? profile.language : "en";
   const t = translations[activeLanguage];
+  const playerName = user?.displayName || user?.email || t.you;
 
   useEffect(() => {
     if (!coachText) setCoachText(t.coachReady);
@@ -402,10 +424,6 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
   }, [game, reviewPly, selected]);
 
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-  }, [theme]);
-
-  useEffect(() => {
     if (requireAuth && !loading && !user) {
       router.replace("/login");
     }
@@ -420,9 +438,10 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
     const params = new URLSearchParams(window.location.search);
     const checkout = params.get("checkout");
     const style = params.get("pieceStyle");
-    if (checkout === "style-success" && (style === "alpha" || style === "merida")) {
-      void markPieceStylePurchased(user.uid, style);
-      setNotice(`${style === "alpha" ? "Alpha" : "Merida"} pieces unlocked.`);
+    const normalizedStyle = normalizePieceStyle(style || undefined);
+    if (checkout === "style-success" && isPaidPieceStyle(normalizedStyle)) {
+      void markPieceStylePurchased(user.uid, normalizedStyle);
+      setNotice(`${pieceStyleLabels[normalizedStyle]} pieces unlocked.`);
       window.history.replaceState({}, "", "/profile");
     }
     if (checkout === "style-cancelled") {
@@ -501,6 +520,10 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
     }
   }
 
+  function socketIdentity() {
+    return { playerName };
+  }
+
   function connectSocket(onOpen?: (socket: WebSocket) => void) {
     const url = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:4000";
     const socket = new WebSocket(url);
@@ -517,18 +540,38 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
       const message = JSON.parse(event.data) as ServerMessage;
       if (message.type === "error") {
         setNotice(message.message);
+        setMatchmaking(false);
         return;
       }
-      if (message.type === "room-created" || message.type === "joined") {
+      if (message.type === "matchmaking-waiting") {
+        setOnlineGameKind("random");
+        setMatchmaking(true);
+        setNotice(t.searchingRandom);
+        return;
+      }
+      if (message.type === "room-created" || message.type === "joined" || message.type === "matched") {
         setRoomId(message.roomId);
         setPlayerColor(message.color);
+        setOnlinePlayers(message.players || {});
         setGame(new Chess(message.fen));
         setMode("online");
-        setNotice(message.type === "room-created" ? t.roomCreated : t.roomJoined);
+        setReviewPly(null);
+        setSuggestedMove(null);
+        setCoachLine(null);
+        setMatchmaking(false);
+        if (message.type === "matched") {
+          setOnlineGameKind("random");
+          setCoachText(t.coachUnavailableRandom);
+          setNotice(t.randomMatched);
+        } else {
+          setOnlineGameKind("friend");
+          setNotice(message.type === "room-created" ? t.roomCreated : t.roomJoined);
+        }
         return;
       }
       if (message.type === "state") {
         setGame(new Chess(message.fen));
+        if (message.players) setOnlinePlayers(message.players);
         setMoveRecords(recordsFromSanMoves(message.moves));
         setReviewPly(null);
         setNotice(message.result ? translatedResult(message.result, t) : message.turn === "w" ? t.whiteToMove : t.blackToMove);
@@ -537,12 +580,24 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
   }
 
   function createRoom() {
-    connectSocket((socket) => socket.send(JSON.stringify({ type: "create-room" })));
+    setOnlineGameKind("friend");
+    setMatchmaking(false);
+    connectSocket((socket) => socket.send(JSON.stringify({ type: "create-room", ...socketIdentity() })));
   }
 
   function joinRoom(id = joinCode.trim()) {
     if (!id) return;
-    connectSocket((socket) => socket.send(JSON.stringify({ type: "join-room", roomId: id })));
+    setOnlineGameKind("friend");
+    setMatchmaking(false);
+    connectSocket((socket) => socket.send(JSON.stringify({ type: "join-room", roomId: id, ...socketIdentity() })));
+  }
+
+  function findRandomPlayer() {
+    resetBoard("online");
+    setOnlineGameKind("random");
+    setMatchmaking(true);
+    setCoachText(t.coachUnavailableRandom);
+    connectSocket((socket) => socket.send(JSON.stringify({ type: "find-random", ...socketIdentity() })));
   }
 
   function switchAiColor(color: "w" | "b") {
@@ -643,9 +698,15 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
     setNotice(t.newGameStarted);
     setCoachLine(null);
     setSuggestedMove(null);
+    setMatchmaking(false);
+    setOnlinePlayers({});
   }
 
   function analyze() {
+    if (mode === "online" && onlineGameKind === "random") {
+      setCoachText(t.coachUnavailableRandom);
+      return;
+    }
     setCoachText(t.coachCalculating);
     setSuggestedMove(null);
     analysisRequestedRef.current = true;
@@ -655,6 +716,12 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
 
   const status = classifyResult(game);
   const shareUrl = typeof window !== "undefined" && roomId ? `${window.location.origin}?room=${roomId}` : "";
+  const whitePlayerName =
+    mode === "ai" ? (aiPlayerColor === "w" ? playerName : "Stockfish") : mode === "online" ? onlinePlayers.w || (playerColor === "w" ? playerName : t.opponent) : playerName;
+  const blackPlayerName =
+    mode === "ai" ? (aiPlayerColor === "b" ? playerName : "Stockfish") : mode === "online" ? onlinePlayers.b || (playerColor === "b" ? playerName : t.opponent) : t.localOpponent;
+  const topPlayer = activePlayerColor === "b" ? { name: whitePlayerName, color: t.white } : { name: blackPlayerName, color: t.black };
+  const bottomPlayer = activePlayerColor === "b" ? { name: blackPlayerName, color: t.black } : { name: whitePlayerName, color: t.white };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -724,50 +791,6 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
           </div>
         </div>
       ) : null}
-      <section className="border-b bg-card">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-5 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-normal"><Link href="/">ChessLift</Link></h1>
-            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              {t.legalChessSubtitle}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="icon" title="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
-              {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </Button>
-            {user ? (
-              <Button variant="outline" onClick={() => void signOutUser()}>
-                <LogOut className="h-4 w-4" /> {t.signOut}
-              </Button>
-            ) : (
-              <>
-                <Button variant="outline" asChild>
-                  <Link href="/login">
-                    <LogIn className="h-4 w-4" /> {t.login}
-                  </Link>
-                </Button>
-                <Button asChild>
-                  <Link href="/register">
-                    <LogIn className="h-4 w-4" /> {t.register}
-                  </Link>
-                </Button>
-              </>
-            )}
-            <Button variant={view === "profile" ? "default" : "outline"} asChild>
-              <Link href={view === "profile" ? "/play/stockfish" : "/profile"}>
-                <Users className="h-4 w-4" /> {view === "profile" ? t.board : t.profile}
-              </Link>
-            </Button>
-            <Button variant="secondary" asChild>
-              <Link href="/pro">
-                <Crown className="h-4 w-4" /> {t.pro}
-              </Link>
-            </Button>
-          </div>
-        </div>
-      </section>
-
       {view === "profile" ? (
         <section className="mx-auto grid max-w-7xl gap-5 px-4 py-5 lg:grid-cols-[360px_1fr]">
           <Card>
@@ -817,39 +840,60 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
                   <div className="space-y-2">
                     <div className="text-sm font-semibold">{t.pieceStyle}</div>
                     <div className="grid grid-cols-2 gap-2">
-                      {(["classic", "cburnett", "noto", "alpha", "merida"] as const).map((style) => {
-                        const label =
-                          style === "cburnett" ? "Cburnett" : style === "noto" ? "Noto" : style === "alpha" ? "Alpha" : style === "merida" ? "Merida" : "Classic";
+                      {(["classic", "cburnett", "noto", "alpha", "merida", "california", "cardinal", "pixel"] as const).map((style) => {
+                        const label = pieceStyleLabels[style];
                         const proLocked = (style === "cburnett" || style === "noto") && !isPro;
-                        const paidLocked = (style === "alpha" || style === "merida") && !purchasedPieceStyles.includes(style);
-
-                        if (paidLocked) {
-                          return (
-                            <Button
-                              key={style}
-                              variant="outline"
-                              size="sm"
-                              onClick={() =>
-                                void startPieceStyleCheckout(style, user.uid).catch((error) =>
-                                  setNotice(error instanceof Error ? error.message : "Could not start checkout.")
-                                )
-                              }
-                            >
-                              {t.buyStyle.replace("{style}", label)}
-                            </Button>
-                          );
-                        }
+                        const paidStyle = isPaidPieceStyle(style) ? style : null;
+                        const paidLocked = Boolean(paidStyle && !purchasedPieceStyles.includes(paidStyle));
+                        const selectedStyle = pieceStyle === style;
 
                         return (
-                          <Button
+                          <div
                             key={style}
-                            variant={pieceStyle === style ? "default" : "outline"}
-                            size="sm"
-                            disabled={proLocked}
-                            onClick={() => void setUserPieceStyle(user.uid, style)}
+                            className={cn(
+                              "rounded-md border bg-background p-2 transition duration-200 hover:-translate-y-0.5 hover:shadow-sm",
+                              selectedStyle ? "border-primary ring-1 ring-primary" : "border-border"
+                            )}
                           >
-                            {label}
-                          </Button>
+                            <div className="mb-2 grid grid-cols-4 gap-1 rounded-md bg-muted p-1">
+                              {([
+                                ["w", "k"],
+                                ["w", "q"],
+                                ["b", "n"],
+                                ["b", "p"]
+                              ] as const).map(([color, type]) => (
+                                <div key={`${style}-${color}${type}`} className="grid aspect-square place-items-center rounded-sm bg-card">
+                                  <ChessPieceIcon color={color} type={type} style={style} preview />
+                                </div>
+                              ))}
+                            </div>
+                            {paidLocked ? (
+                              <Button
+                                className="w-full"
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  paidStyle
+                                    ? void startPieceStyleCheckout(paidStyle, user.uid).catch((error) =>
+                                        setNotice(error instanceof Error ? error.message : "Could not start checkout.")
+                                      )
+                                    : undefined
+                                }
+                              >
+                                {t.buyStyle.replace("{style}", label)}
+                              </Button>
+                            ) : (
+                              <Button
+                                className="w-full"
+                                variant={selectedStyle ? "default" : "outline"}
+                                size="sm"
+                                disabled={proLocked}
+                                onClick={() => void setUserPieceStyle(user.uid, style)}
+                              >
+                                {proLocked ? `${label} Pro` : label}
+                              </Button>
+                            )}
+                          </div>
                         );
                       })}
                     </div>
@@ -980,9 +1024,14 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
               </Button>
             )}
             {mode === "online" ? (
-              <Button variant="outline" onClick={createRoom}>
-                <LinkIcon className="h-4 w-4" /> {t.createRoom}
-              </Button>
+              <>
+                <Button variant="outline" onClick={createRoom}>
+                  <LinkIcon className="h-4 w-4" /> {t.createRoom}
+                </Button>
+                <Button variant={onlineGameKind === "random" ? "default" : "outline"} onClick={findRandomPlayer} disabled={matchmaking}>
+                  <Search className="h-4 w-4" /> {matchmaking ? t.searching : t.findRandom}
+                </Button>
+              </>
             ) : null}
             <Button variant="outline" size="icon" title={t.resetBoard} onClick={() => resetBoard()}>
               <RotateCcw className="h-4 w-4" />
@@ -1016,6 +1065,14 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
               </div>
             </div>
           ) : null}
+
+          <div className="flex w-full max-w-[720px] items-center justify-between rounded-lg border bg-card px-4 py-3 shadow-sm">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">{t.opponent}</div>
+              <div className="font-semibold">{topPlayer.name}</div>
+            </div>
+            <Badge>{topPlayer.color}</Badge>
+          </div>
 
           <div className="aspect-square w-full max-w-[720px] overflow-hidden rounded-lg border shadow-sm">
             <div className="board-grid h-full w-full">
@@ -1071,11 +1128,20 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
             </div>
           </div>
 
+          <div className="flex w-full max-w-[720px] items-center justify-between rounded-lg border bg-card px-4 py-3 shadow-sm">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">{t.you}</div>
+              <div className="font-semibold">{bottomPlayer.name}</div>
+            </div>
+            <Badge>{bottomPlayer.color}</Badge>
+          </div>
+
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <Badge>{translatedResult(status, t)}</Badge>
             <Badge>{game.turn() === "w" ? t.whiteToMove : t.blackToMove}</Badge>
             <Badge>{t.you}: {activePlayerColor === "w" ? t.white : t.black}</Badge>
             <Badge>{mode}</Badge>
+            {mode === "online" ? <Badge>{onlineGameKind === "random" ? t.randomMatch : t.friendRoom}</Badge> : null}
             {reviewPly !== null ? <Badge>{t.viewingPly.replace("{ply}", String(reviewPly))}</Badge> : null}
             <Badge>{mode === "online" ? `Socket: ${socketStatus}` : t.socketFriend}</Badge>
             {notice ? <span className="text-muted-foreground">{notice}</span> : null}
@@ -1089,13 +1155,17 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm text-muted-foreground">{coachText}</p>
-              {coachLine ? (
+              {mode === "online" && onlineGameKind === "random" ? (
+                <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+                  {t.coachUnavailableRandom}
+                </div>
+              ) : coachLine ? (
                 <div className="rounded-md bg-muted p-3 text-sm">
                   {t.depth} {coachLine.depth} | {t.eval} {coachLine.score}
                   <div className="mt-1 break-words text-muted-foreground">{coachLine.pv}</div>
                 </div>
               ) : null}
-              <Button className="w-full" onClick={analyze}>
+              <Button className="w-full" onClick={analyze} disabled={mode === "online" && onlineGameKind === "random"}>
                 <BrainCircuit className="h-4 w-4" /> {t.analyze}
               </Button>
             </CardContent>
@@ -1110,10 +1180,13 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
                 <Input value={joinCode} onChange={(event) => setJoinCode(event.target.value)} placeholder={t.roomCode} />
                 <Button onClick={() => joinRoom()}>{t.join}</Button>
               </div>
+              <Button className="w-full" variant="outline" onClick={findRandomPlayer} disabled={matchmaking}>
+                <Search className="h-4 w-4" /> {matchmaking ? t.searchingRandom : t.findRandomPlayer}
+              </Button>
               {roomId ? (
                 <div className="rounded-md bg-muted p-3 text-sm">
-                  {t.room} <strong>{roomId}</strong>
-                  <div className="mt-1 break-words text-muted-foreground">{shareUrl}</div>
+                  {onlineGameKind === "random" ? t.randomMatch : t.room} <strong>{roomId}</strong>
+                  {onlineGameKind === "friend" ? <div className="mt-1 break-words text-muted-foreground">{shareUrl}</div> : null}
                 </div>
               ) : null}
             </CardContent>

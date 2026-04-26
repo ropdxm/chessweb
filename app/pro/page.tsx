@@ -65,17 +65,6 @@ export default function ProPage() {
 
   return (
     <main className="min-h-screen">
-      <section className="border-b bg-card">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-5">
-          <div>
-            <h1 className="text-3xl font-bold">{t.proTitle}</h1>
-            <p className="mt-1 text-sm text-muted-foreground">{t.proSubtitle}</p>
-          </div>
-          <Button variant="outline" asChild>
-            <Link href="/play/stockfish">{t.backToChess}</Link>
-          </Button>
-        </div>
-      </section>
 
       <section className="mx-auto flex max-w-5xl flex-col gap-4 px-4 py-6">
         <Card>

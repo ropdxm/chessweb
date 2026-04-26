@@ -25,7 +25,7 @@ export async function startProCheckout(userId?: string, returnPath = "/pro") {
   await stripe?.redirectToCheckout({ sessionId });
 }
 
-export async function startPieceStyleCheckout(pieceStyle: "alpha" | "merida", userId?: string) {
+export async function startPieceStyleCheckout(pieceStyle: "alpha" | "merida" | "california" | "cardinal" | "pixel", userId?: string) {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
   const response = await fetch(`${apiUrl}/api/stripe/create-piece-style-session`, {
     method: "POST",

@@ -9,7 +9,8 @@ import { Chess } from "chess.js";
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 
-type Client = WebSocket & { roomId?: string; color?: "w" | "b" };
+type Client = WebSocket & { roomId?: string; color?: "w" | "b"; queued?: boolean; playerName?: string };
+type PaidPieceStyle = "alpha" | "merida" | "california" | "cardinal" | "pixel";
 
 type Room = {
   id: string;
@@ -22,8 +23,16 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 const rooms = new Map<string, Room>();
+const matchmakingQueue: Client[] = [];
 const stripeSecret = process.env.STRIPE_SECRET_KEY;
 const stripe = stripeSecret ? new Stripe(stripeSecret) : null;
+const paidPieceStyles: Record<PaidPieceStyle, string> = {
+  alpha: "Alpha Pieces",
+  merida: "Merida Pieces",
+  california: "California Pieces",
+  cardinal: "Cardinal Pieces",
+  pixel: "Pixel Pieces"
+};
 
 app.use(
   cors({
@@ -32,7 +41,7 @@ app.use(
 );
 
 app.get("/health", (_request, response) => {
-  response.json({ ok: true, rooms: rooms.size });
+  response.json({ ok: true, rooms: rooms.size, matchmakingQueue: matchmakingQueue.length });
 });
 
 app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), (request, response) => {
@@ -124,8 +133,14 @@ app.post("/api/stripe/create-piece-style-session", async (request, response) => 
       return;
     }
 
-    const pieceStyle = request.body.pieceStyle === "merida" ? "merida" : "alpha";
-    const styleName = pieceStyle === "merida" ? "Merida Pieces" : "Alpha Pieces";
+    const requestedStyle = typeof request.body.pieceStyle === "string" ? request.body.pieceStyle : "";
+    if (!(requestedStyle in paidPieceStyles)) {
+      response.status(400).json({ error: "Unknown paid piece style." });
+      return;
+    }
+
+    const pieceStyle = requestedStyle as PaidPieceStyle;
+    const styleName = paidPieceStyles[pieceStyle];
     const origin = process.env.CLIENT_ORIGIN || "http://localhost:3001";
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -188,6 +203,12 @@ function makeRoomId() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
+function removeFromMatchmaking(socket: Client) {
+  const index = matchmakingQueue.indexOf(socket);
+  if (index >= 0) matchmakingQueue.splice(index, 1);
+  socket.queued = false;
+}
+
 function send(client: WebSocket, payload: unknown) {
   if (client.readyState === WebSocket.OPEN) {
     client.send(JSON.stringify(payload));
@@ -202,7 +223,11 @@ function broadcast(room: Room) {
     pgn: room.game.pgn(),
     turn: room.game.turn(),
     result,
-    moves: room.moves
+    moves: room.moves,
+    players: {
+      w: room.players.w?.playerName || "White player",
+      b: room.players.b?.playerName || "Black player"
+    }
   };
   Object.values(room.players).forEach((client) => client && send(client, payload));
 }
@@ -225,7 +250,11 @@ wss.on("connection", (socket: Client) => {
         from?: string;
         to?: string;
         promotion?: string;
+        playerName?: string;
       };
+      if (message.playerName && typeof message.playerName === "string") {
+        socket.playerName = message.playerName.slice(0, 60);
+      }
 
       if (message.type === "create-room") {
         const id = makeRoomId();
@@ -233,7 +262,7 @@ wss.on("connection", (socket: Client) => {
         socket.roomId = id;
         socket.color = "w";
         rooms.set(id, room);
-        send(socket, { type: "room-created", roomId: id, fen: room.game.fen(), color: "w" });
+        send(socket, { type: "room-created", roomId: id, fen: room.game.fen(), color: "w", players: { w: socket.playerName || "White player" } });
         return;
       }
 
@@ -247,7 +276,50 @@ wss.on("connection", (socket: Client) => {
         room.players[color] = socket;
         socket.roomId = room.id;
         socket.color = color;
-        send(socket, { type: "joined", roomId: room.id, fen: room.game.fen(), color });
+        send(socket, {
+          type: "joined",
+          roomId: room.id,
+          fen: room.game.fen(),
+          color,
+          players: {
+            w: room.players.w?.playerName || "White player",
+            b: room.players.b?.playerName || "Black player"
+          }
+        });
+        broadcast(room);
+        return;
+      }
+
+      if (message.type === "find-random") {
+        removeFromMatchmaking(socket);
+        const opponentIndex = matchmakingQueue.findIndex((client) => client !== socket && client.readyState === WebSocket.OPEN && !client.roomId);
+        if (opponentIndex === -1) {
+          socket.queued = true;
+          matchmakingQueue.push(socket);
+          send(socket, { type: "matchmaking-waiting" });
+          return;
+        }
+
+        const opponent = matchmakingQueue.splice(opponentIndex, 1)[0];
+        opponent.queued = false;
+        socket.queued = false;
+
+        const id = makeRoomId();
+        const socketIsWhite = Math.random() >= 0.5;
+        const white = socketIsWhite ? socket : opponent;
+        const black = socketIsWhite ? opponent : socket;
+        const room: Room = { id, game: new Chess(), players: { w: white, b: black }, moves: [] };
+        rooms.set(id, room);
+        white.roomId = id;
+        white.color = "w";
+        black.roomId = id;
+        black.color = "b";
+        const players = {
+          w: white.playerName || "White player",
+          b: black.playerName || "Black player"
+        };
+        send(white, { type: "matched", roomId: id, fen: room.game.fen(), color: "w", players });
+        send(black, { type: "matched", roomId: id, fen: room.game.fen(), color: "b", players });
         broadcast(room);
         return;
       }
@@ -280,6 +352,7 @@ wss.on("connection", (socket: Client) => {
   });
 
   socket.on("close", () => {
+    removeFromMatchmaking(socket);
     const room = socket.roomId ? rooms.get(socket.roomId) : null;
     if (!room || !socket.color) return;
     delete room.players[socket.color];

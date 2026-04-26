@@ -78,7 +78,7 @@ export type UserProfile = {
   city: string;
   cityKey: string;
   pro?: boolean;
-  pieceStyle?: "classic" | "cburnett" | "noto" | "neo" | "mono" | "alpha" | "merida";
+  pieceStyle?: "classic" | "cburnett" | "noto" | "neo" | "mono" | "alpha" | "merida" | "california" | "cardinal" | "pixel";
   purchasedPieceStyles?: string[];
   language?: "en" | "kk" | "ru" | "fr";
   stripeCustomerId?: string;
@@ -267,7 +267,7 @@ export async function setUserPieceStyle(userId: string | undefined, pieceStyle: 
   );
 }
 
-export async function markPieceStylePurchased(userId: string | undefined, pieceStyle: "alpha" | "merida") {
+export async function markPieceStylePurchased(userId: string | undefined, pieceStyle: "alpha" | "merida" | "california" | "cardinal" | "pixel") {
   if (!db || !userId) return;
   const userRef = doc(db, "users", userId);
   const snapshot = await getDoc(userRef);

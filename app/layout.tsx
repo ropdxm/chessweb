@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { AppNavbar } from "@/components/app-navbar";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -9,7 +10,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body>{children}</body>
+      <body>
+        <AppNavbar />
+        <div className="page-enter">{children}</div>
+      </body>
     </html>
   );
 }

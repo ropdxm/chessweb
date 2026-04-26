@@ -48,7 +48,8 @@
 
 body {
   min-height: 100vh;
-  background: hsl(var(--background));
+  background:
+    hsl(var(--background));
   color: hsl(var(--foreground));
 }
 
@@ -60,4 +61,60 @@ button, input, select {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
   grid-template-rows: repeat(8, minmax(0, 1fr));
+}
+
+.page-enter {
+  animation: page-enter 320ms ease-out both;
+}
+
+.animate-fade-up {
+  animation: fade-up 360ms ease-out both;
+}
+
+.animate-nav-drop {
+  animation: nav-drop 260ms ease-out both;
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes nav-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
 }
