@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Crown, Home, LogIn, LogOut, Moon, Sun, UserRound } from "lucide-react";
+import { Crown, Home, LogIn, Moon, Sun, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { signOutUser, useFirebaseUser } from "@/lib/firebase";
+import { useFirebaseUser } from "@/lib/firebase";
 import { useI18n } from "@/lib/i18n";
 
 export function AppNavbar() {
@@ -36,21 +36,16 @@ export function AppNavbar() {
             {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
           <Button variant="ghost" asChild>
-            <Link href="/pro">
-              <Crown className="h-4 w-4" /> {t.pro}
+            <Link href="/pro" title={t.pro} aria-label={t.pro}>
+              <Crown className="h-4 w-4" />
             </Link>
           </Button>
           {user ? (
-            <>
-              <Button variant="outline" asChild>
-                <Link href="/profile">
-                  <UserRound className="h-4 w-4" /> {t.profile}
-                </Link>
-              </Button>
-              <Button variant="outline" onClick={() => void signOutUser()}>
-                <LogOut className="h-4 w-4" /> {t.signOut}
-              </Button>
-            </>
+            <Button variant="outline" asChild>
+              <Link href="/profile" title={t.profile} aria-label={t.profile}>
+                <UserRound className="h-4 w-4" />
+              </Link>
+            </Button>
           ) : (
             <Button variant="outline" asChild aria-disabled={loading}>
               <Link href="/login">

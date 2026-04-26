@@ -9,7 +9,8 @@ import { Chess } from "chess.js";
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 
-type Client = WebSocket & { roomId?: string; color?: "w" | "b"; queued?: boolean; playerName?: string };
+type TimeControl = { initialMs: number; incrementMs: number; label: string };
+type Client = WebSocket & { roomId?: string; color?: "w" | "b"; queued?: boolean; playerName?: string; timeControl?: TimeControl };
 type PaidPieceStyle = "alpha" | "merida" | "california" | "cardinal" | "pixel";
 
 type Room = {
@@ -17,6 +18,10 @@ type Room = {
   game: Chess;
   players: Partial<Record<"w" | "b", Client>>;
   moves: string[];
+  timeControl: TimeControl;
+  clocks: Record<"w" | "b", number>;
+  lastMoveAt?: number;
+  result?: string;
 };
 
 const app = express();
@@ -32,6 +37,15 @@ const paidPieceStyles: Record<PaidPieceStyle, string> = {
   california: "California Pieces",
   cardinal: "Cardinal Pieces",
   pixel: "Pixel Pieces"
+};
+const defaultTimeControl: TimeControl = { initialMs: 5 * 60_000, incrementMs: 0, label: "5+0" };
+const timeControls: Record<string, TimeControl> = {
+  "3+0": { initialMs: 3 * 60_000, incrementMs: 0, label: "3+0" },
+  "5+0": defaultTimeControl,
+  "10+0": { initialMs: 10 * 60_000, incrementMs: 0, label: "10+0" },
+  "3+10": { initialMs: 3 * 60_000, incrementMs: 10_000, label: "3+10" },
+  "5+10": { initialMs: 5 * 60_000, incrementMs: 10_000, label: "5+10" },
+  "10+10": { initialMs: 10 * 60_000, incrementMs: 10_000, label: "10+10" }
 };
 
 app.use(
@@ -203,6 +217,45 @@ function makeRoomId() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
+function parseTimeControl(value: unknown): TimeControl {
+  return typeof value === "string" && timeControls[value] ? timeControls[value] : defaultTimeControl;
+}
+
+function makeRoom(id: string, players: Partial<Record<"w" | "b", Client>>, timeControl: TimeControl): Room {
+  return {
+    id,
+    game: new Chess(),
+    players,
+    moves: [],
+    timeControl,
+    clocks: { w: timeControl.initialMs, b: timeControl.initialMs },
+    lastMoveAt: players.w && players.b ? Date.now() : undefined
+  };
+}
+
+function currentClocks(room: Room) {
+  const clocks = { ...room.clocks };
+  if (!room.result && room.players.w && room.players.b && room.lastMoveAt) {
+    const turn = room.game.turn();
+    clocks[turn] = Math.max(0, clocks[turn] - (Date.now() - room.lastMoveAt));
+  }
+  return clocks;
+}
+
+function resultByTimeout(loser: "w" | "b") {
+  return loser === "w" ? "blackWonTime" : "whiteWonTime";
+}
+
+function maybeFlagTimeout(room: Room) {
+  if (room.result || !room.players.w || !room.players.b) return false;
+  const clocks = currentClocks(room);
+  const turn = room.game.turn();
+  if (clocks[turn] > 0) return false;
+  room.clocks = clocks;
+  room.result = resultByTimeout(turn);
+  return true;
+}
+
 function removeFromMatchmaking(socket: Client) {
   const index = matchmakingQueue.indexOf(socket);
   if (index >= 0) matchmakingQueue.splice(index, 1);
@@ -216,7 +269,10 @@ function send(client: WebSocket, payload: unknown) {
 }
 
 function broadcast(room: Room) {
-  const result = classify(room.game);
+  maybeFlagTimeout(room);
+  const result = room.result || classify(room.game);
+  if (result && result !== "In progress") room.result = result;
+  const clocks = currentClocks(room);
   const payload = {
     type: "state",
     fen: room.game.fen(),
@@ -224,6 +280,8 @@ function broadcast(room: Room) {
     turn: room.game.turn(),
     result,
     moves: room.moves,
+    clocks,
+    timeControl: room.timeControl.label,
     players: {
       w: room.players.w?.playerName || "White player",
       b: room.players.b?.playerName || "Black player"
@@ -233,12 +291,12 @@ function broadcast(room: Room) {
 }
 
 function classify(game: Chess) {
-  if (game.isCheckmate()) return game.turn() === "w" ? "Black won by checkmate" : "White won by checkmate";
-  if (game.isStalemate()) return "Draw by stalemate";
-  if (game.isThreefoldRepetition()) return "Draw by repetition";
-  if (game.isInsufficientMaterial()) return "Draw by insufficient material";
-  if (game.isDraw()) return "Draw";
-  return undefined;
+  if (game.isCheckmate()) return game.turn() === "w" ? "blackWonCheckmate" : "whiteWonCheckmate";
+  if (game.isStalemate()) return "drawStalemate";
+  if (game.isThreefoldRepetition()) return "drawRepetition";
+  if (game.isInsufficientMaterial()) return "drawMaterial";
+  if (game.isDraw()) return "draw";
+  return "In progress";
 }
 
 wss.on("connection", (socket: Client) => {
@@ -251,18 +309,28 @@ wss.on("connection", (socket: Client) => {
         to?: string;
         promotion?: string;
         playerName?: string;
+        timeControl?: string;
       };
       if (message.playerName && typeof message.playerName === "string") {
         socket.playerName = message.playerName.slice(0, 60);
       }
+      socket.timeControl = parseTimeControl(message.timeControl);
 
       if (message.type === "create-room") {
         const id = makeRoomId();
-        const room: Room = { id, game: new Chess(), players: { w: socket }, moves: [] };
+        const room = makeRoom(id, { w: socket }, socket.timeControl);
         socket.roomId = id;
         socket.color = "w";
         rooms.set(id, room);
-        send(socket, { type: "room-created", roomId: id, fen: room.game.fen(), color: "w", players: { w: socket.playerName || "White player" } });
+        send(socket, {
+          type: "room-created",
+          roomId: id,
+          fen: room.game.fen(),
+          color: "w",
+          players: { w: socket.playerName || "White player" },
+          clocks: room.clocks,
+          timeControl: room.timeControl.label
+        });
         return;
       }
 
@@ -276,11 +344,14 @@ wss.on("connection", (socket: Client) => {
         room.players[color] = socket;
         socket.roomId = room.id;
         socket.color = color;
+        if (room.players.w && room.players.b && !room.lastMoveAt) room.lastMoveAt = Date.now();
         send(socket, {
           type: "joined",
           roomId: room.id,
           fen: room.game.fen(),
           color,
+          clocks: currentClocks(room),
+          timeControl: room.timeControl.label,
           players: {
             w: room.players.w?.playerName || "White player",
             b: room.players.b?.playerName || "Black player"
@@ -292,7 +363,9 @@ wss.on("connection", (socket: Client) => {
 
       if (message.type === "find-random") {
         removeFromMatchmaking(socket);
-        const opponentIndex = matchmakingQueue.findIndex((client) => client !== socket && client.readyState === WebSocket.OPEN && !client.roomId);
+        const opponentIndex = matchmakingQueue.findIndex(
+          (client) => client !== socket && client.readyState === WebSocket.OPEN && !client.roomId && client.timeControl?.label === socket.timeControl?.label
+        );
         if (opponentIndex === -1) {
           socket.queued = true;
           matchmakingQueue.push(socket);
@@ -308,7 +381,7 @@ wss.on("connection", (socket: Client) => {
         const socketIsWhite = Math.random() >= 0.5;
         const white = socketIsWhite ? socket : opponent;
         const black = socketIsWhite ? opponent : socket;
-        const room: Room = { id, game: new Chess(), players: { w: white, b: black }, moves: [] };
+        const room = makeRoom(id, { w: white, b: black }, socket.timeControl || defaultTimeControl);
         rooms.set(id, room);
         white.roomId = id;
         white.color = "w";
@@ -318,8 +391,8 @@ wss.on("connection", (socket: Client) => {
           w: white.playerName || "White player",
           b: black.playerName || "Black player"
         };
-        send(white, { type: "matched", roomId: id, fen: room.game.fen(), color: "w", players });
-        send(black, { type: "matched", roomId: id, fen: room.game.fen(), color: "b", players });
+        send(white, { type: "matched", roomId: id, fen: room.game.fen(), color: "w", players, clocks: room.clocks, timeControl: room.timeControl.label });
+        send(black, { type: "matched", roomId: id, fen: room.game.fen(), color: "b", players, clocks: room.clocks, timeControl: room.timeControl.label });
         broadcast(room);
         return;
       }
@@ -330,17 +403,32 @@ wss.on("connection", (socket: Client) => {
           send(socket, { type: "error", message: "Join a room first" });
           return;
         }
+        if (room.result) {
+          send(socket, { type: "error", message: "Game is over" });
+          return;
+        }
+        if (maybeFlagTimeout(room)) {
+          broadcast(room);
+          return;
+        }
         if (room.game.turn() !== socket.color) {
           send(socket, { type: "error", message: "It is not your turn" });
           return;
         }
         try {
+          const now = Date.now();
+          if (room.lastMoveAt) {
+            room.clocks[socket.color] = Math.max(0, room.clocks[socket.color] - (now - room.lastMoveAt)) + room.timeControl.incrementMs;
+          }
           const move = room.game.move({
             from: message.from || "",
             to: message.to || "",
             promotion: message.promotion || "q"
           });
+          room.lastMoveAt = now;
           room.moves.push(move.san);
+          const result = classify(room.game);
+          if (result !== "In progress") room.result = result;
           broadcast(room);
         } catch {
           send(socket, { type: "error", message: "Illegal move" });
@@ -359,6 +447,12 @@ wss.on("connection", (socket: Client) => {
     if (!room.players.w && !room.players.b) rooms.delete(room.id);
   });
 });
+
+setInterval(() => {
+  rooms.forEach((room) => {
+    if (maybeFlagTimeout(room)) broadcast(room);
+  });
+}, 1000);
 
 const port = Number(process.env.PORT || 4000);
 server.listen(port, () => {

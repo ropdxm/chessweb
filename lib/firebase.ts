@@ -78,7 +78,7 @@ export type UserProfile = {
   city: string;
   cityKey: string;
   pro?: boolean;
-  pieceStyle?: "classic" | "cburnett" | "noto" | "neo" | "mono" | "alpha" | "merida" | "california" | "cardinal" | "pixel";
+  pieceStyle?: "cburnett" | "noto" | "neo" | "mono" | "alpha" | "merida" | "california" | "cardinal" | "pixel";
   purchasedPieceStyles?: string[];
   language?: "en" | "kk" | "ru" | "fr";
   stripeCustomerId?: string;
@@ -159,7 +159,7 @@ export async function upsertUserProfile(user: User, city: string) {
       cityKey: city.toLowerCase(),
       score: existing.exists() ? existing.data().score || 0 : 0,
       pro: existing.exists() ? Boolean(existing.data().pro) : false,
-      pieceStyle: existing.exists() ? existing.data().pieceStyle || "classic" : "classic",
+      pieceStyle: existing.exists() ? existing.data().pieceStyle || "noto" : "noto",
       purchasedPieceStyles: existing.exists() ? existing.data().purchasedPieceStyles || [] : [],
       language: existing.exists() ? existing.data().language || "en" : "en",
       lastSeenAt: serverTimestamp()

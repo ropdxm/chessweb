@@ -24,6 +24,7 @@ import {
   firebaseEnabled,
   saveGameRecord,
   signInGoogle,
+  signOutUser,
   markPieceStylePurchased,
   setUserPieceStyle,
   setUserLanguage,
@@ -55,9 +56,8 @@ const pieceGlyphs: Record<string, string> = {
   bk: "\u265A"
 };
 
-type PieceStyle = "classic" | "cburnett" | "noto" | "alpha" | "merida" | "california" | "cardinal" | "pixel";
+type PieceStyle = "cburnett" | "noto" | "alpha" | "merida" | "california" | "cardinal" | "pixel";
 const pieceStyleLabels: Record<PieceStyle, string> = {
-  classic: "Classic",
   cburnett: "Cburnett",
   noto: "Noto",
   alpha: "Alpha",
@@ -79,13 +79,13 @@ const pieceNames: Record<string, string> = {
 
 function normalizePieceStyle(style?: string): PieceStyle {
   if (style === "cburnett" || style === "neo") return "cburnett";
-  if (style === "noto" || style === "mono") return "noto";
+  if (style === "noto" || style === "mono" || style === "classic") return "noto";
   if (style === "alpha") return "alpha";
   if (style === "merida") return "merida";
   if (style === "california") return "california";
   if (style === "cardinal") return "cardinal";
   if (style === "pixel") return "pixel";
-  return "classic";
+  return "noto";
 }
 
 function isPaidPieceStyle(style: PieceStyle): style is PaidPieceStyle {
@@ -115,7 +115,7 @@ function ChessPieceIcon({
   color,
   type,
   large = false,
-  style = "classic",
+  style = "noto",
   preview = false
 }: {
   color: "w" | "b";
@@ -174,12 +174,13 @@ const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
 const ranks = ["8", "7", "6", "5", "4", "3", "2", "1"];
 
 type Mode = "local" | "ai" | "online";
+type TimeControlKey = "3+0" | "5+0" | "10+0" | "3+10" | "5+10" | "10+10";
 type ServerMessage =
-  | { type: "room-created"; roomId: string; fen: string; color: "w" | "b"; players?: Partial<Record<"w" | "b", string>> }
-  | { type: "joined"; roomId: string; fen: string; color: "w" | "b"; players?: Partial<Record<"w" | "b", string>> }
-  | { type: "matched"; roomId: string; fen: string; color: "w" | "b"; players?: Partial<Record<"w" | "b", string>> }
+  | { type: "room-created"; roomId: string; fen: string; color: "w" | "b"; players?: Partial<Record<"w" | "b", string>>; clocks?: Record<"w" | "b", number>; timeControl?: TimeControlKey }
+  | { type: "joined"; roomId: string; fen: string; color: "w" | "b"; players?: Partial<Record<"w" | "b", string>>; clocks?: Record<"w" | "b", number>; timeControl?: TimeControlKey }
+  | { type: "matched"; roomId: string; fen: string; color: "w" | "b"; players?: Partial<Record<"w" | "b", string>>; clocks?: Record<"w" | "b", number>; timeControl?: TimeControlKey }
   | { type: "matchmaking-waiting" }
-  | { type: "state"; fen: string; pgn: string; turn: "w" | "b"; result?: string; moves: string[]; players?: Partial<Record<"w" | "b", string>> }
+  | { type: "state"; fen: string; pgn: string; turn: "w" | "b"; result?: string; moves: string[]; players?: Partial<Record<"w" | "b", string>>; clocks?: Record<"w" | "b", number>; timeControl?: TimeControlKey }
   | { type: "error"; message: string };
 
 type MoveRecord = SavedMove;
@@ -197,8 +198,31 @@ function classifyResult(game: Chess) {
   return "In progress";
 }
 
+function normalizeResultKey(result: string) {
+  const value = result.toLowerCase();
+  if (result === "In progress") return result;
+  if (value.includes("white won") && value.includes("checkmate")) return "whiteWonCheckmate";
+  if (value.includes("black won") && value.includes("checkmate")) return "blackWonCheckmate";
+  if (value.includes("white won") && value.includes("time")) return "whiteWonTime";
+  if (value.includes("black won") && value.includes("time")) return "blackWonTime";
+  if (value.includes("stalemate")) return "drawStalemate";
+  if (value.includes("repetition")) return "drawRepetition";
+  if (value.includes("insufficient")) return "drawMaterial";
+  if (value === "draw" || value.startsWith("draw ")) return "draw";
+  return result;
+}
+
+function resultWinner(result: string): "w" | "b" | "draw" | null {
+  const normalized = normalizeResultKey(result);
+  if (normalized.startsWith("whiteWon")) return "w";
+  if (normalized.startsWith("blackWon")) return "b";
+  if (normalized.startsWith("draw")) return "draw";
+  return null;
+}
+
 function translatedResult(result: string, t: Record<string, string>) {
-  return t[result] || (result === "In progress" ? t.inProgress : result);
+  const normalized = normalizeResultKey(result);
+  return t[normalized] || (normalized === "In progress" ? t.inProgress : normalized);
 }
 
 function makeMoveRecord(before: Chess, after: Chess, move: ReturnType<Chess["move"]>, ply: number): MoveRecord {
@@ -215,9 +239,21 @@ function makeMoveRecord(before: Chess, after: Chess, move: ReturnType<Chess["mov
 
 function scoreDeltaForResult(result: string, userColor: "w" | "b", isPro = false) {
   const winPoints = isPro ? 15 : 10;
-  if (result === "whiteWonCheckmate") return userColor === "w" ? winPoints : -5;
-  if (result === "blackWonCheckmate") return userColor === "b" ? winPoints : -5;
+  const winner = resultWinner(result);
+  if (winner === userColor) return winPoints;
+  if (winner && winner !== "draw") return -5;
   return 0;
+}
+
+function formatClock(ms: number) {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function reviewIndex(reviewPly: number | null, moveCount: number) {
+  return reviewPly === null ? moveCount : reviewPly;
 }
 
 const enginePieceValues: Record<string, number> = {
@@ -324,7 +360,7 @@ function fenHistoryString(records: MoveRecord[]) {
   return [new Chess().fen(), ...records.map((move) => move.fenAfter)].join("\n");
 }
 
-function MiniBoard({ fen, large = false, pieceStyle = "classic" }: { fen: string; large?: boolean; pieceStyle?: PieceStyle }) {
+function MiniBoard({ fen, large = false, pieceStyle = "noto" }: { fen: string; large?: boolean; pieceStyle?: PieceStyle }) {
   const replayGame = useMemo(() => {
     try {
       return new Chess(fen);
@@ -380,6 +416,9 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   const [onlineGameKind, setOnlineGameKind] = useState<"friend" | "random">(initialOnlineKind);
   const [matchmaking, setMatchmaking] = useState(false);
   const [onlinePlayers, setOnlinePlayers] = useState<Partial<Record<"w" | "b", string>>>({});
+  const [timeControl, setTimeControl] = useState<TimeControlKey>("5+0");
+  const [displayedClocks, setDisplayedClocks] = useState<Record<"w" | "b", number>>({ w: 5 * 60_000, b: 5 * 60_000 });
+  const [onlineResult, setOnlineResult] = useState("");
   const [notice, setNotice] = useState("");
   const [savedGameKey, setSavedGameKey] = useState("");
   const [resultDialog, setResultDialog] = useState<{ title: string; body: string; delta: number } | null>(null);
@@ -397,10 +436,10 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   const purchasedPieceStyles = profile?.purchasedPieceStyles || [];
   const normalizedProfileStyle = normalizePieceStyle(profile?.pieceStyle);
   const canUseProfileStyle =
-    normalizedProfileStyle === "classic" ||
-    ((normalizedProfileStyle === "cburnett" || normalizedProfileStyle === "noto") && isPro) ||
+    normalizedProfileStyle === "noto" ||
+    (normalizedProfileStyle === "cburnett" && isPro) ||
     (isPaidPieceStyle(normalizedProfileStyle) && purchasedPieceStyles.includes(normalizedProfileStyle));
-  const pieceStyle = canUseProfileStyle ? normalizedProfileStyle : "classic";
+  const pieceStyle = canUseProfileStyle ? normalizedProfileStyle : "noto";
   const activeLanguage: Language = isPro && (profile?.language === "kk" || profile?.language === "ru" || profile?.language === "fr") ? profile.language : "en";
   const t = translations[activeLanguage];
   const playerName = user?.displayName || user?.email || t.you;
@@ -489,26 +528,40 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   }, [aiDifficulty, aiPlayerColor, game, mode]);
 
   useEffect(() => {
-    if (!game.isGameOver() || !moveRecords.length) return;
+    if (mode !== "online") return;
+    const timer = window.setInterval(() => {
+      setDisplayedClocks((current) => {
+        if (onlineResult || !onlinePlayers.w || !onlinePlayers.b) return current;
+        const turn = game.turn();
+        return {
+          ...current,
+          [turn]: Math.max(0, current[turn] - 500)
+        };
+      });
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [game, mode, onlinePlayers.b, onlinePlayers.w, onlineResult]);
+
+  useEffect(() => {
+    const finalResult = onlineResult || classifyResult(game);
+    if (finalResult === "In progress" || (!moveRecords.length && mode !== "online")) return;
     if (!user) {
       setNotice(t.signInAutoSave);
       return;
     }
-    const key = `${game.fen()}-${moveRecords.length}`;
+    const key = `${game.fen()}-${moveRecords.length}-${finalResult}`;
     if (savedGameKey === key) return;
-    const result = classifyResult(game);
-    const delta = scoreDeltaForResult(result, activePlayerColor, isPro);
-    if (delta > 0) {
-      setResultDialog({
-        title: "Congratualtions! You won!",
-        body: t.ratingBoost,
-        delta
-      });
-    }
+    const delta = scoreDeltaForResult(finalResult, activePlayerColor, isPro);
+    const winner = resultWinner(finalResult);
+    setResultDialog({
+      title: winner === "draw" ? t.gameDrawn : winner === activePlayerColor ? t.youWon : t.youLost,
+      body: translatedResult(finalResult, t),
+      delta
+    });
     void persistFinishedGame(true);
     setSavedGameKey(key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePlayerColor, game, isPro, moveRecords, savedGameKey, user]);
+  }, [activePlayerColor, game, isPro, mode, moveRecords, onlineResult, savedGameKey, user]);
 
   function replaceGame(next: Chess) {
     setGame(next);
@@ -522,7 +575,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   }
 
   function socketIdentity() {
-    return { playerName };
+    return { playerName, timeControl };
   }
 
   function connectSocket(onOpen?: (socket: WebSocket) => void) {
@@ -554,6 +607,11 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
         setRoomId(message.roomId);
         setPlayerColor(message.color);
         setOnlinePlayers(message.players || {});
+        if (message.clocks) {
+          setDisplayedClocks(message.clocks);
+        }
+        if (message.timeControl) setTimeControl(message.timeControl);
+        setOnlineResult("");
         setGame(new Chess(message.fen));
         setMode("online");
         setReviewPly(null);
@@ -573,6 +631,11 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
       if (message.type === "state") {
         setGame(new Chess(message.fen));
         if (message.players) setOnlinePlayers(message.players);
+        if (message.clocks) {
+          setDisplayedClocks(message.clocks);
+        }
+        if (message.timeControl) setTimeControl(message.timeControl);
+        setOnlineResult(message.result && message.result !== "In progress" ? message.result : "");
         setMoveRecords(recordsFromSanMoves(message.moves));
         setReviewPly(null);
         setNotice(message.result ? translatedResult(message.result, t) : message.turn === "w" ? t.whiteToMove : t.blackToMove);
@@ -644,6 +707,14 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
         setSelected(null);
         return;
       }
+      if (piece && piece.color === game.get(selected)?.color && (mode !== "online" || piece.color === playerColor)) {
+        if (mode === "ai" && piece.color !== aiPlayerColor) {
+          setNotice(t.aiOwnsSide);
+          return;
+        }
+        setSelected(square);
+        return;
+      }
       handleMove(selected, square);
       return;
     }
@@ -657,9 +728,9 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   }
 
   async function persistFinishedGame(auto = false) {
-    const result = classifyResult(game);
+    const result = onlineResult || classifyResult(game);
     const delta = scoreDeltaForResult(result, activePlayerColor, isPro);
-    const finishedKey = game.isGameOver() ? `${game.fen()}-${moveRecords.length}` : "";
+    const finishedKey = result !== "In progress" ? `${game.fen()}-${moveRecords.length}-${result}` : "";
     if (finishedKey && savedGameKey === finishedKey) {
       setNotice(t.alreadySaved);
       return;
@@ -701,6 +772,8 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
     setSuggestedMove(null);
     setMatchmaking(false);
     setOnlinePlayers({});
+    setOnlineResult("");
+    setDisplayedClocks({ w: 5 * 60_000, b: 5 * 60_000 });
   }
 
   function analyze() {
@@ -715,14 +788,23 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
     engineRef.current?.bestMove(game.fen(), isPro ? 12 : 6, game.moves({ verbose: true }));
   }
 
-  const status = classifyResult(game);
+  function stepReview(delta: -1 | 1) {
+    const current = reviewIndex(reviewPly, moveRecords.length);
+    const next = Math.max(0, Math.min(moveRecords.length, current + delta));
+    setReviewPly(next === moveRecords.length ? null : next);
+  }
+
+  const status = onlineResult || classifyResult(game);
   const shareUrl = typeof window !== "undefined" && roomId ? `${window.location.origin}?room=${roomId}` : "";
+  const currentReviewIndex = reviewIndex(reviewPly, moveRecords.length);
   const whitePlayerName =
     mode === "ai" ? (aiPlayerColor === "w" ? playerName : "Stockfish") : mode === "online" ? onlinePlayers.w || (playerColor === "w" ? playerName : t.opponent) : playerName;
   const blackPlayerName =
     mode === "ai" ? (aiPlayerColor === "b" ? playerName : "Stockfish") : mode === "online" ? onlinePlayers.b || (playerColor === "b" ? playerName : t.opponent) : t.localOpponent;
-  const topPlayer = activePlayerColor === "b" ? { name: whitePlayerName, color: t.white } : { name: blackPlayerName, color: t.black };
-  const bottomPlayer = activePlayerColor === "b" ? { name: blackPlayerName, color: t.black } : { name: whitePlayerName, color: t.white };
+  const topPlayer = activePlayerColor === "b" ? { name: whitePlayerName, color: t.white, side: "w" as const } : { name: blackPlayerName, color: t.black, side: "b" as const };
+  const bottomPlayer = activePlayerColor === "b" ? { name: blackPlayerName, color: t.black, side: "b" as const } : { name: whitePlayerName, color: t.white, side: "w" as const };
+  const topClock = activePlayerColor === "b" ? displayedClocks.w : displayedClocks.b;
+  const bottomClock = activePlayerColor === "b" ? displayedClocks.b : displayedClocks.w;
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -733,13 +815,6 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (!requireAuth || loading || !user || initialMode !== "online" || initialOnlineKind !== "random") return;
-    if (roomId || matchmaking || socketStatus === "connecting") return;
-    findRandomPlayer();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMode, initialOnlineKind, loading, matchmaking, requireAuth, roomId, socketStatus, user]);
 
   if (requireAuth && !firebaseEnabled) {
     return (
@@ -791,10 +866,13 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
             <h2 className="text-xl font-bold">{resultDialog.title}</h2>
             <p className="mt-2 text-sm text-muted-foreground">{resultDialog.body}</p>
             <div className="mt-4 rounded-md bg-muted p-3 text-sm">
-              Rating change: <span className="font-semibold text-primary">+{resultDialog.delta}</span>
+              {t.ratingChange}:{" "}
+              <span className={cn("font-semibold", resultDialog.delta >= 0 ? "text-primary" : "text-destructive")}>
+                {resultDialog.delta >= 0 ? "+" : ""}{resultDialog.delta}
+              </span>
             </div>
             <Button className="mt-4 w-full" onClick={() => setResultDialog(null)}>
-              Continue
+              {t.continue}
             </Button>
           </div>
         </div>
@@ -823,6 +901,9 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                   <div className="rounded-md bg-muted p-3 text-sm">
                     {t.gamesSaved}: <span className="font-semibold">{savedGames.length}</span>
                   </div>
+                  <Button className="w-full" variant="outline" onClick={() => void signOutUser()}>
+                    {t.signOut}
+                  </Button>
                   <div className="space-y-2">
                     <div className="text-sm font-semibold">{t.language}</div>
                     <div className="grid grid-cols-2 gap-2">
@@ -848,9 +929,9 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                   <div className="space-y-2">
                     <div className="text-sm font-semibold">{t.pieceStyle}</div>
                     <div className="grid grid-cols-2 gap-2">
-                      {(["classic", "cburnett", "noto", "alpha", "merida", "california", "cardinal", "pixel"] as const).map((style) => {
+                      {(["noto", "cburnett", "alpha", "merida", "california", "cardinal", "pixel"] as const).map((style) => {
                         const label = pieceStyleLabels[style];
-                        const proLocked = (style === "cburnett" || style === "noto") && !isPro;
+                        const proLocked = style === "cburnett" && !isPro;
                         const paidStyle = isPaidPieceStyle(style) ? style : null;
                         const paidLocked = Boolean(paidStyle && !purchasedPieceStyles.includes(paidStyle));
                         const selectedStyle = pieceStyle === style;
@@ -1079,7 +1160,11 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
               <div className="text-xs uppercase tracking-wide text-muted-foreground">{t.opponent}</div>
               <div className="font-semibold">{topPlayer.name}</div>
             </div>
-            <Badge>{topPlayer.color}</Badge>
+            <div className="flex items-center gap-2">
+              {status === "In progress" && game.turn() === topPlayer.side ? <Badge>{t.toMove}</Badge> : null}
+              {mode === "online" ? <Badge className="font-mono text-sm">{formatClock(topClock)}</Badge> : null}
+              <Badge>{topPlayer.color}</Badge>
+            </div>
           </div>
 
           <div className="aspect-square w-full max-w-[720px] overflow-hidden rounded-lg border shadow-sm">
@@ -1141,7 +1226,28 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
               <div className="text-xs uppercase tracking-wide text-muted-foreground">{t.you}</div>
               <div className="font-semibold">{bottomPlayer.name}</div>
             </div>
-            <Badge>{bottomPlayer.color}</Badge>
+            <div className="flex items-center gap-2">
+              {status === "In progress" && game.turn() === bottomPlayer.side ? <Badge>{t.toMove}</Badge> : null}
+              {mode === "online" ? <Badge className="font-mono text-sm">{formatClock(bottomClock)}</Badge> : null}
+              <Badge>{bottomPlayer.color}</Badge>
+            </div>
+          </div>
+
+          <div className="flex w-full max-w-[720px] flex-wrap items-center justify-between gap-2 rounded-lg border bg-card px-3 py-2 shadow-sm">
+            <Button variant="outline" size="sm" onClick={() => stepReview(-1)} disabled={currentReviewIndex === 0}>
+              {t.back}
+            </Button>
+            <Badge>
+              {currentReviewIndex} / {moveRecords.length}
+            </Badge>
+            <div className="flex gap-2">
+              <Button variant={reviewPly === null ? "default" : "outline"} size="sm" onClick={() => setReviewPly(null)} disabled={!moveRecords.length}>
+                {t.live}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => stepReview(1)} disabled={currentReviewIndex >= moveRecords.length}>
+                {t.forward}
+              </Button>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -1184,6 +1290,24 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
               <CardTitle>{t.multiplayer}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              {mode === "online" && !roomId && !matchmaking ? (
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold">{t.timeControl}</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["3+0", "5+0", "10+0", "3+10", "5+10", "10+10"] as TimeControlKey[]).map((control) => (
+                      <Button
+                        key={control}
+                        variant={timeControl === control ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setTimeControl(control)}
+                      >
+                        {control}
+                      </Button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{t.timeControlHelp}</p>
+                </div>
+              ) : null}
               <div className="flex gap-2">
                 <Input value={joinCode} onChange={(event) => setJoinCode(event.target.value)} placeholder={t.roomCode} />
                 <Button onClick={() => joinRoom()}>{t.join}</Button>

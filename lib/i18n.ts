@@ -44,7 +44,7 @@ export const translations: Record<Language, Record<string, string>> = {
     proSubtitle: "Monthly subscription for stronger training and premium customization.",
     backToChess: "Back to chess",
     premiumPieceStyles: "Premium Piece Styles",
-    premiumPieceStylesBody: "Unlock Cburnett and Noto SVG chess sets. Alpha, Merida, California, Cardinal, and Pixel are separate $2 purchases.",
+    premiumPieceStylesBody: "Unlock Cburnett with Pro. Alpha, Merida, California, Cardinal, and Pixel are separate $2 purchases.",
     strongerCoach: "Stronger AI Coach",
     strongerCoachBody: "Free users get lighter analysis. Pro users get the best move by default.",
     ratingBoost: "Rating Boost",
@@ -75,7 +75,6 @@ export const translations: Record<Language, Record<string, string>> = {
     language: "Language",
     languageLocked: "Kazakh, Russian, and French are Pro-only languages.",
     pieceStyle: "Piece style",
-    classic: "Classic",
     cburnett: "Cburnett",
     noto: "Noto",
     alpha: "Alpha",
@@ -84,7 +83,7 @@ export const translations: Record<Language, Record<string, string>> = {
     cardinal: "Cardinal",
     pixel: "Pixel",
     buyStyle: "Buy {style} $2",
-    proStylesLocked: "Cburnett and Noto SVG sets are Pro styles.",
+    proStylesLocked: "Cburnett is a Pro style. Noto is the default style.",
     paidStylesNote: "Alpha, Merida, California, Cardinal, and Pixel are separate $2 piece set purchases and are not included with Pro.",
     assetNote: "SVG pieces from Wikimedia Commons and Lichess open-source piece assets.",
     signInToSave: "Sign in to save games and see your profile.",
@@ -120,6 +119,7 @@ export const translations: Record<Language, Record<string, string>> = {
     inProgress: "In progress",
     whiteToMove: "White to move",
     blackToMove: "Black to move",
+    toMove: "To move",
     you: "You",
     opponent: "Opponent",
     localOpponent: "Local opponent",
@@ -144,6 +144,8 @@ export const translations: Record<Language, Record<string, string>> = {
     clickMoveHelp: "Click a move to inspect that old position. The live game is unchanged."
     ,whiteWonCheckmate: "White won by checkmate",
     blackWonCheckmate: "Black won by checkmate",
+    whiteWonTime: "White won on time",
+    blackWonTime: "Black won on time",
     drawStalemate: "Draw by stalemate",
     drawRepetition: "Draw by repetition",
     drawMaterial: "Draw by insufficient material",
@@ -163,7 +165,14 @@ export const translations: Record<Language, Record<string, string>> = {
     coachReady: "Stockfish is ready to review the current position.",
     coachCalculating: "Coach is calculating...",
     coachLikes: "Coach: the engine likes {move}.",
-    stockfishPlayed: "Stockfish level {level} played {move}."
+    stockfishPlayed: "Stockfish level {level} played {move}.",
+    youWon: "You won!",
+    youLost: "You lost",
+    gameDrawn: "Draw",
+    ratingChange: "Rating change",
+    continue: "Continue",
+    timeControl: "Time control",
+    timeControlHelp: "Use 3+10, 5+10, or 10+10 for a 10 second increment after every move."
   },
   kk: {},
   ru: {},
@@ -246,6 +255,7 @@ translations.kk = {
   strong: "Күшті қарсылас",
   whiteToMove: "Ақ жүреді",
   blackToMove: "Қара жүреді",
+  toMove: "Жүреді",
   you: "Сіз",
   opponent: "Қарсылас",
   localOpponent: "Жергілікті қарсылас",
@@ -265,6 +275,8 @@ translations.kk = {
   clickMoveHelp: "Ескі позицияны көру үшін жүрісті басыңыз. Тікелей ойын өзгермейді.",
   whiteWonCheckmate: "Ақ матпен жеңді",
   blackWonCheckmate: "Қара матпен жеңді",
+  whiteWonTime: "Ақ уақыт бойынша жеңді",
+  blackWonTime: "Қара уақыт бойынша жеңді",
   drawStalemate: "Пат бойынша тең",
   drawRepetition: "Қайталау бойынша тең",
   drawMaterial: "Материал жеткіліксіз болғандықтан тең",
@@ -284,7 +296,14 @@ translations.kk = {
   coachReady: "Stockfish позицияны талдауға дайын.",
   coachCalculating: "Жаттықтырушы есептеп жатыр...",
   coachLikes: "Жаттықтырушыға {move} жүрісі ұнайды.",
-  stockfishPlayed: "Stockfish деңгейі {level}: {move} ойнады."
+  stockfishPlayed: "Stockfish деңгейі {level}: {move} ойнады.",
+  youWon: "Сіз жеңдіңіз!",
+  youLost: "Сіз жеңілдіңіз",
+  gameDrawn: "Тең ойын",
+  ratingChange: "Рейтинг өзгерісі",
+  continue: "Жалғастыру",
+  timeControl: "Уақыт бақылауы",
+  timeControlHelp: "3+10, 5+10 немесе 10+10 әр жүрістен кейін 10 секунд қосады."
 };
 
 translations.ru = {
@@ -360,6 +379,7 @@ translations.ru = {
   strong: "Сильный соперник",
   whiteToMove: "Ход белых",
   blackToMove: "Ход черных",
+  toMove: "Ход",
   you: "Вы",
   opponent: "Соперник",
   localOpponent: "Локальный соперник",
@@ -379,6 +399,8 @@ translations.ru = {
   clickMoveHelp: "Нажмите на ход, чтобы посмотреть старую позицию. Текущая партия не изменится.",
   whiteWonCheckmate: "Белые выиграли матом",
   blackWonCheckmate: "Черные выиграли матом",
+  whiteWonTime: "Белые выиграли по времени",
+  blackWonTime: "Черные выиграли по времени",
   drawStalemate: "Ничья патом",
   drawRepetition: "Ничья повторением",
   drawMaterial: "Ничья из-за недостатка материала",
@@ -398,7 +420,14 @@ translations.ru = {
   coachReady: "Stockfish готов анализировать позицию.",
   coachCalculating: "Тренер считает...",
   coachLikes: "Тренер рекомендует {move}.",
-  stockfishPlayed: "Stockfish уровня {level} сыграл {move}."
+  stockfishPlayed: "Stockfish уровня {level} сыграл {move}.",
+  youWon: "Вы выиграли!",
+  youLost: "Вы проиграли",
+  gameDrawn: "Ничья",
+  ratingChange: "Изменение рейтинга",
+  continue: "Продолжить",
+  timeControl: "Контроль времени",
+  timeControlHelp: "3+10, 5+10 или 10+10 добавляют 10 секунд после каждого хода."
 };
 
 translations.fr = {
@@ -474,6 +503,7 @@ translations.fr = {
   strong: "Adversaire fort",
   whiteToMove: "Aux blancs de jouer",
   blackToMove: "Aux noirs de jouer",
+  toMove: "Au trait",
   you: "Vous",
   opponent: "Adversaire",
   localOpponent: "Adversaire local",
@@ -493,6 +523,8 @@ translations.fr = {
   clickMoveHelp: "Cliquez sur un coup pour voir cette ancienne position. La partie en direct ne change pas.",
   whiteWonCheckmate: "Les blancs gagnent par échec et mat",
   blackWonCheckmate: "Les noirs gagnent par échec et mat",
+  whiteWonTime: "Les blancs gagnent au temps",
+  blackWonTime: "Les noirs gagnent au temps",
   drawStalemate: "Nulle par pat",
   drawRepetition: "Nulle par répétition",
   drawMaterial: "Nulle par matériel insuffisant",
@@ -512,7 +544,14 @@ translations.fr = {
   coachReady: "Stockfish est prêt à analyser la position.",
   coachCalculating: "Le coach calcule...",
   coachLikes: "Le coach recommande {move}.",
-  stockfishPlayed: "Stockfish niveau {level} a joué {move}."
+  stockfishPlayed: "Stockfish niveau {level} a joué {move}.",
+  youWon: "Vous avez gagné !",
+  youLost: "Vous avez perdu",
+  gameDrawn: "Nulle",
+  ratingChange: "Changement de classement",
+  continue: "Continuer",
+  timeControl: "Cadence",
+  timeControlHelp: "3+10, 5+10 ou 10+10 ajoutent 10 secondes après chaque coup."
 };
 
 export function useI18n() {
