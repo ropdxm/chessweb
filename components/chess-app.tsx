@@ -1112,16 +1112,6 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                 </Link>
               </Button>
             )}
-            {mode === "online" ? (
-              <>
-                <Button variant="outline" onClick={createRoom}>
-                  <LinkIcon className="h-4 w-4" /> {t.createRoom}
-                </Button>
-                <Button variant={onlineGameKind === "random" ? "default" : "outline"} onClick={findRandomPlayer} disabled={matchmaking}>
-                  <Search className="h-4 w-4" /> {matchmaking ? t.searching : t.findRandom}
-                </Button>
-              </>
-            ) : null}
             <Button variant="outline" size="icon" title={t.resetBoard} onClick={() => resetBoard()}>
               <RotateCcw className="h-4 w-4" />
             </Button>
