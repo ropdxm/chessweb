@@ -1297,9 +1297,16 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                 </div>
               ) : null}
               {onlineGameKind === "friend" ? (
-                <div className="flex gap-2">
-                  <Input value={joinCode} onChange={(event) => setJoinCode(event.target.value)} placeholder={t.roomCode} />
-                  <Button onClick={() => joinRoom()}>{t.join}</Button>
+                <div className="space-y-3">
+                  {!roomId ? (
+                    <Button className="w-full" variant="outline" onClick={createRoom}>
+                      <LinkIcon className="h-4 w-4" /> {t.createRoom}
+                    </Button>
+                  ) : null}
+                  <div className="flex gap-2">
+                    <Input value={joinCode} onChange={(event) => setJoinCode(event.target.value)} placeholder={t.roomCode} />
+                    <Button onClick={() => joinRoom()}>{t.join}</Button>
+                  </div>
                 </div>
               ) : null}
               {onlineGameKind === "random" ? (
