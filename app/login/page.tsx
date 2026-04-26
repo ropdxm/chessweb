@@ -9,10 +9,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { firebaseEnabled, signInEmail, signInGoogle, useFirebaseUser } from "@/lib/firebase";
 import { useEffect } from "react";
+import { useI18n } from "@/lib/i18n";
 
 export default function LoginPage() {
   const router = useRouter();
   const { user, loading } = useFirebaseUser();
+  const { t } = useI18n();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
@@ -26,21 +28,21 @@ export default function LoginPage() {
     setMessage("");
     try {
       await signInEmail(email, password);
-      setMessage("Logged in successfully.");
+      setMessage(t.loginSuccess);
       router.replace("/profile");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Login failed.");
+      setMessage(error instanceof Error ? error.message : t.loginFailed);
     }
   }
 
   async function googleLogin() {
-    setMessage("Opening Google sign-in...");
+    setMessage(t.openingGoogle);
     try {
       await signInGoogle();
-      setMessage("Logged in successfully.");
+      setMessage(t.loginSuccess);
       router.replace("/profile");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Google login failed.");
+      setMessage(error instanceof Error ? error.message : t.googleLoginFailed);
     }
   }
 
@@ -48,7 +50,7 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center px-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>Login</CardTitle>
+          <CardTitle>{t.login}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <form className="space-y-3" onSubmit={submit}>
@@ -56,18 +58,18 @@ export default function LoginPage() {
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              placeholder="Email"
+              placeholder={t.email}
               required
             />
             <Input
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="Password"
+              placeholder={t.password}
               required
             />
             <Button className="w-full" type="submit" disabled={!firebaseEnabled}>
-              <LogIn className="h-4 w-4" /> Login
+              <LogIn className="h-4 w-4" /> {t.login}
             </Button>
           </form>
           <Button
@@ -75,14 +77,14 @@ export default function LoginPage() {
             onClick={() => void googleLogin()}
             disabled={!firebaseEnabled}
           >
-            <LogIn className="h-4 w-4" /> Continue with Google
+            <LogIn className="h-4 w-4" /> {t.continueGoogle}
           </Button>
           {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
           <Button className="w-full" variant="outline" asChild>
-            <Link href="/register">Create account</Link>
+            <Link href="/register">{t.createAccount}</Link>
           </Button>
           <Button className="w-full" variant="ghost" asChild>
-            <Link href="/">Back to home</Link>
+            <Link href="/">{t.backHome}</Link>
           </Button>
         </CardContent>
       </Card>

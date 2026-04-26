@@ -78,7 +78,11 @@ export type UserProfile = {
   city: string;
   cityKey: string;
   pro?: boolean;
-  pieceStyle?: "classic" | "neo" | "mono";
+  pieceStyle?: "classic" | "cburnett" | "noto" | "neo" | "mono" | "alpha" | "merida";
+  purchasedPieceStyles?: string[];
+  language?: "en" | "kk" | "ru" | "fr";
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
 };
 
 export function useFirebaseUser() {
@@ -156,6 +160,8 @@ export async function upsertUserProfile(user: User, city: string) {
       score: existing.exists() ? existing.data().score || 0 : 0,
       pro: existing.exists() ? Boolean(existing.data().pro) : false,
       pieceStyle: existing.exists() ? existing.data().pieceStyle || "classic" : "classic",
+      purchasedPieceStyles: existing.exists() ? existing.data().purchasedPieceStyles || [] : [],
+      language: existing.exists() ? existing.data().language || "en" : "en",
       lastSeenAt: serverTimestamp()
     },
     { merge: true }
@@ -235,12 +241,18 @@ export function useSavedGames(userId?: string) {
   return games;
 }
 
-export async function markPro(userId?: string) {
+export async function markPro(userId?: string, stripe?: { customerId?: string; subscriptionId?: string }) {
   if (!db || !userId) return;
-  await updateDoc(doc(db, "users", userId), {
-    pro: true,
-    upgradedAt: serverTimestamp()
-  });
+  await setDoc(
+    doc(db, "users", userId),
+    {
+      pro: true,
+      stripeCustomerId: stripe?.customerId,
+      stripeSubscriptionId: stripe?.subscriptionId,
+      upgradedAt: serverTimestamp()
+    },
+    { merge: true }
+  );
 }
 
 export async function setUserPieceStyle(userId: string | undefined, pieceStyle: UserProfile["pieceStyle"]) {
@@ -249,6 +261,35 @@ export async function setUserPieceStyle(userId: string | undefined, pieceStyle: 
     doc(db, "users", userId),
     {
       pieceStyle,
+      updatedAt: serverTimestamp()
+    },
+    { merge: true }
+  );
+}
+
+export async function markPieceStylePurchased(userId: string | undefined, pieceStyle: "alpha" | "merida") {
+  if (!db || !userId) return;
+  const userRef = doc(db, "users", userId);
+  const snapshot = await getDoc(userRef);
+  const current = snapshot.exists() ? snapshot.data().purchasedPieceStyles || [] : [];
+  const next = Array.from(new Set([...current, pieceStyle]));
+  await setDoc(
+    userRef,
+    {
+      purchasedPieceStyles: next,
+      pieceStyle,
+      updatedAt: serverTimestamp()
+    },
+    { merge: true }
+  );
+}
+
+export async function setUserLanguage(userId: string | undefined, language: UserProfile["language"]) {
+  if (!db || !userId) return;
+  await setDoc(
+    doc(db, "users", userId),
+    {
+      language,
       updatedAt: serverTimestamp()
     },
     { merge: true }

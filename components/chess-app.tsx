@@ -18,6 +18,7 @@ import {
   Users
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,7 +28,9 @@ import {
   saveGameRecord,
   signInGoogle,
   signOutUser,
+  markPieceStylePurchased,
   setUserPieceStyle,
+  setUserLanguage,
   updateLeaderboard,
   upsertUserProfile,
   useFirebaseUser,
@@ -37,6 +40,8 @@ import {
   type SavedMove
 } from "@/lib/firebase";
 import { createStockfish, type StockfishLine } from "@/lib/stockfish";
+import { startPieceStyleCheckout } from "@/lib/stripe";
+import { translations, type Language } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const pieceGlyphs: Record<string, string> = {
@@ -54,6 +59,43 @@ const pieceGlyphs: Record<string, string> = {
   bk: "\u265A"
 };
 
+type PieceStyle = "classic" | "cburnett" | "noto" | "alpha" | "merida";
+const pieceNames: Record<string, string> = {
+  k: "KING",
+  q: "QUEEN",
+  r: "ROOK",
+  b: "BISHOP",
+  n: "KNIGHT",
+  p: "PAWN"
+};
+
+function normalizePieceStyle(style?: string): PieceStyle {
+  if (style === "cburnett" || style === "neo") return "cburnett";
+  if (style === "noto" || style === "mono") return "noto";
+  if (style === "alpha") return "alpha";
+  if (style === "merida") return "merida";
+  return "classic";
+}
+
+function wikimediaPieceUrl(style: PieceStyle, color: "w" | "b", type: string) {
+  if (style === "alpha" || style === "merida") {
+    return `https://raw.githubusercontent.com/lichess-org/lila/master/public/piece/${style}/${color}${type.toUpperCase()}.svg`;
+  }
+
+  if (style === "cburnett") {
+    const pieceColor = color === "w" ? "l" : "d";
+    return `https://commons.wikimedia.org/wiki/Special:FilePath/Chess_${type}${pieceColor}t45.svg`;
+  }
+
+  if (style === "noto") {
+    const pieceColor = color === "w" ? "WHITE" : "BLACK";
+    const pieceName = pieceNames[type] || "PAWN";
+    return `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(`${pieceColor} CHESS ${pieceName}.svg`)}`;
+  }
+
+  return null;
+}
+
 function ChessPieceIcon({
   color,
   type,
@@ -63,11 +105,23 @@ function ChessPieceIcon({
   color: "w" | "b";
   type: string;
   large?: boolean;
-  style?: "classic" | "neo" | "mono";
+  style?: PieceStyle;
 }) {
+  const source = wikimediaPieceUrl(style, color, type);
+  if (source) {
+    return (
+      <img
+        src={source}
+        alt=""
+        className={cn("object-contain drop-shadow-sm", large ? "h-[84%] w-[84%]" : "h-[78%] w-[78%]")}
+        draggable={false}
+      />
+    );
+  }
+
   const fill = color === "w" ? "#f8fafc" : "#111827";
-  const stroke = style === "mono" ? "#0f172a" : color === "w" ? "#334155" : "#f8fafc";
-  const pieceText = style === "neo" ? pieceGlyphs[`${color}${type}`] : style === "mono" ? pieceGlyphs[`w${type}`] : pieceGlyphs[`${color}${type}`];
+  const stroke = color === "w" ? "#334155" : "#f8fafc";
+  const pieceText = pieceGlyphs[`${color}${type}`];
   const common = {
     fill,
     stroke,
@@ -91,10 +145,7 @@ function ChessPieceIcon({
       className={cn(
         "flex h-[74%] w-[74%] items-center justify-center leading-none",
         large ? "text-[clamp(3rem,7vw,5.8rem)]" : "text-[clamp(1.4rem,4vw,3.8rem)]",
-        style === "neo" && color === "w" && "text-amber-50 drop-shadow-[0_2px_2px_rgba(15,23,42,0.8)]",
-        style === "neo" && color === "b" && "text-emerald-950 drop-shadow-[0_1px_1px_rgba(255,255,255,0.55)]",
-        style === "mono" && "text-slate-100 drop-shadow-[0_1px_2px_rgba(15,23,42,0.85)]",
-        style === "classic" && (color === "b" ? "text-slate-950" : "text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.7)]")
+        color === "b" ? "text-slate-950" : "text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.7)]"
       )}
     >
       {pieceText}
@@ -119,12 +170,16 @@ function squareName(fileIndex: number, rankIndex: number) {
 }
 
 function classifyResult(game: Chess) {
-  if (game.isCheckmate()) return game.turn() === "w" ? "Black won by checkmate" : "White won by checkmate";
-  if (game.isStalemate()) return "Draw by stalemate";
-  if (game.isThreefoldRepetition()) return "Draw by repetition";
-  if (game.isInsufficientMaterial()) return "Draw by insufficient material";
-  if (game.isDraw()) return "Draw";
+  if (game.isCheckmate()) return game.turn() === "w" ? "blackWonCheckmate" : "whiteWonCheckmate";
+  if (game.isStalemate()) return "drawStalemate";
+  if (game.isThreefoldRepetition()) return "drawRepetition";
+  if (game.isInsufficientMaterial()) return "drawMaterial";
+  if (game.isDraw()) return "draw";
   return "In progress";
+}
+
+function translatedResult(result: string, t: Record<string, string>) {
+  return t[result] || (result === "In progress" ? t.inProgress : result);
 }
 
 function makeMoveRecord(before: Chess, after: Chess, move: ReturnType<Chess["move"]>, ply: number): MoveRecord {
@@ -141,8 +196,8 @@ function makeMoveRecord(before: Chess, after: Chess, move: ReturnType<Chess["mov
 
 function scoreDeltaForResult(result: string, userColor: "w" | "b", isPro = false) {
   const winPoints = isPro ? 15 : 10;
-  if (result.startsWith("White won")) return userColor === "w" ? winPoints : -5;
-  if (result.startsWith("Black won")) return userColor === "b" ? winPoints : -5;
+  if (result === "whiteWonCheckmate") return userColor === "w" ? winPoints : -5;
+  if (result === "blackWonCheckmate") return userColor === "b" ? winPoints : -5;
   return 0;
 }
 
@@ -250,7 +305,7 @@ function fenHistoryString(records: MoveRecord[]) {
   return [new Chess().fen(), ...records.map((move) => move.fenAfter)].join("\n");
 }
 
-function MiniBoard({ fen, large = false, pieceStyle = "classic" }: { fen: string; large?: boolean; pieceStyle?: "classic" | "neo" | "mono" }) {
+function MiniBoard({ fen, large = false, pieceStyle = "classic" }: { fen: string; large?: boolean; pieceStyle?: PieceStyle }) {
   const replayGame = useMemo(() => {
     try {
       return new Chess(fen);
@@ -281,9 +336,11 @@ type ChessAppProps = {
   initialMode?: Mode;
   initialView?: "play" | "profile";
   lockedMode?: boolean;
+  requireAuth?: boolean;
 };
 
-export default function ChessApp({ initialMode = "ai", initialView = "play", lockedMode = false }: ChessAppProps) {
+export default function ChessApp({ initialMode = "ai", initialView = "play", lockedMode = false, requireAuth = false }: ChessAppProps) {
+  const router = useRouter();
   const [game, setGame] = useState(() => new Chess());
   const [moveRecords, setMoveRecords] = useState<MoveRecord[]>([]);
   const [reviewPly, setReviewPly] = useState<number | null>(null);
@@ -293,7 +350,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
   const [city, setCity] = useState("Almaty");
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [coachLine, setCoachLine] = useState<StockfishLine | null>(null);
-  const [coachText, setCoachText] = useState("Stockfish is ready to review the current position.");
+  const [coachText, setCoachText] = useState("");
   const [suggestedMove, setSuggestedMove] = useState<{ from: Square; to: Square } | null>(null);
   const [aiDifficulty, setAiDifficulty] = useState(3);
   const [roomId, setRoomId] = useState("");
@@ -309,13 +366,25 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
   const analysisRequestedRef = useRef(false);
   const engineRef = useRef<ReturnType<typeof createStockfish> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const { user } = useFirebaseUser();
+  const { user, loading } = useFirebaseUser();
   const profile = useUserProfile(user?.uid);
   const leaderboard = useLeaderboard();
   const savedGames = useSavedGames(user?.uid);
   const activePlayerColor = mode === "online" ? playerColor : mode === "ai" ? aiPlayerColor : "w";
   const isPro = Boolean(profile?.pro);
-  const pieceStyle = isPro ? profile?.pieceStyle || "classic" : "classic";
+  const purchasedPieceStyles = profile?.purchasedPieceStyles || [];
+  const normalizedProfileStyle = normalizePieceStyle(profile?.pieceStyle);
+  const canUseProfileStyle =
+    normalizedProfileStyle === "classic" ||
+    ((normalizedProfileStyle === "cburnett" || normalizedProfileStyle === "noto") && isPro) ||
+    ((normalizedProfileStyle === "alpha" || normalizedProfileStyle === "merida") && purchasedPieceStyles.includes(normalizedProfileStyle));
+  const pieceStyle = canUseProfileStyle ? normalizedProfileStyle : "classic";
+  const activeLanguage: Language = isPro && (profile?.language === "kk" || profile?.language === "ru" || profile?.language === "fr") ? profile.language : "en";
+  const t = translations[activeLanguage];
+
+  useEffect(() => {
+    if (!coachText) setCoachText(t.coachReady);
+  }, [coachText, t.coachReady]);
 
   const visibleGame = useMemo(() => {
     if (reviewPly === null) return game;
@@ -337,8 +406,30 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
   }, [theme]);
 
   useEffect(() => {
+    if (requireAuth && !loading && !user) {
+      router.replace("/login");
+    }
+  }, [loading, requireAuth, router, user]);
+
+  useEffect(() => {
     if (user) void upsertUserProfile(user, city);
   }, [city, user]);
+
+  useEffect(() => {
+    if (!user || view !== "profile") return;
+    const params = new URLSearchParams(window.location.search);
+    const checkout = params.get("checkout");
+    const style = params.get("pieceStyle");
+    if (checkout === "style-success" && (style === "alpha" || style === "merida")) {
+      void markPieceStylePurchased(user.uid, style);
+      setNotice(`${style === "alpha" ? "Alpha" : "Merida"} pieces unlocked.`);
+      window.history.replaceState({}, "", "/profile");
+    }
+    if (checkout === "style-cancelled") {
+      setNotice("Piece style checkout was cancelled.");
+      window.history.replaceState({}, "", "/profile");
+    }
+  }, [user, view]);
 
   useEffect(() => {
     engineRef.current = createStockfish({
@@ -349,12 +440,12 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
           setSuggestedMove(parsed);
           analysisRequestedRef.current = false;
         }
-        setCoachText(`Coach: the engine likes ${move || "this position"}.`);
+        setCoachText(t.coachLikes.replace("{move}", move || "this position"));
       },
-      onStatus: (status) => setCoachText(status === "ready" ? "Stockfish is ready to review the current position." : status)
+      onStatus: (status) => setCoachText(status === "ready" ? t.coachReady : status)
     });
     return () => engineRef.current?.dispose();
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     engineRef.current?.setSkill(5);
@@ -372,7 +463,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
       setMoveRecords((records) => [...records, makeMoveRecord(before, next, move, records.length + 1)]);
       setReviewPly(null);
       setSuggestedMove(null);
-      setCoachText(`Stockfish level ${aiDifficulty} played ${move.san}.`);
+      setCoachText(t.stockfishPlayed.replace("{level}", String(aiDifficulty)).replace("{move}", move.san));
     }, 350);
     return () => window.clearTimeout(timer);
   }, [aiDifficulty, aiPlayerColor, game, mode]);
@@ -380,7 +471,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
   useEffect(() => {
     if (!game.isGameOver() || !moveRecords.length) return;
     if (!user) {
-      setNotice("Sign in to auto-save finished games.");
+      setNotice(t.signInAutoSave);
       return;
     }
     const key = `${game.fen()}-${moveRecords.length}`;
@@ -390,7 +481,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
     if (delta > 0) {
       setResultDialog({
         title: "Congratualtions! You won!",
-        body: "Your rating increased by 10.",
+        body: t.ratingBoost,
         delta
       });
     }
@@ -433,14 +524,14 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
         setPlayerColor(message.color);
         setGame(new Chess(message.fen));
         setMode("online");
-        setNotice(message.type === "room-created" ? "Room created. Share the link." : "Joined room.");
+        setNotice(message.type === "room-created" ? t.roomCreated : t.roomJoined);
         return;
       }
       if (message.type === "state") {
         setGame(new Chess(message.fen));
         setMoveRecords(recordsFromSanMoves(message.moves));
         setReviewPly(null);
-        setNotice(message.result || `${message.turn === "w" ? "White" : "Black"} to move`);
+        setNotice(message.result ? translatedResult(message.result, t) : message.turn === "w" ? t.whiteToMove : t.blackToMove);
       }
     };
   }
@@ -462,7 +553,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
   function handleMove(from: Square, to: Square) {
     if (mode === "online") {
       if (game.turn() !== playerColor) {
-        setNotice("Wait for your turn.");
+        setNotice(t.waitingTurn);
         return;
       }
       sendWs({ type: "move", roomId, from, to, promotion: "q" });
@@ -476,7 +567,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
       const move = next.move({ from, to, promotion: "q" });
       setMoveRecords((records) => [...records, makeMoveRecord(before, next, move, records.length + 1)]);
     } catch {
-      setNotice("Illegal move.");
+      setNotice(t.illegalMove);
       setSelected(null);
       return;
     }
@@ -488,7 +579,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
 
   function clickSquare(square: Square) {
     if (reviewPly !== null) {
-      setNotice("Return to live board before making a move.");
+      setNotice(t.returnLive);
       return;
     }
     const piece = game.get(square);
@@ -501,7 +592,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
       return;
     }
     if (mode === "ai" && piece && piece.color !== aiPlayerColor) {
-      setNotice("That side belongs to the AI.");
+      setNotice(t.aiOwnsSide);
       return;
     }
     if (piece && (mode !== "online" || piece.color === playerColor)) {
@@ -514,14 +605,14 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
     const delta = scoreDeltaForResult(result, activePlayerColor, isPro);
     const finishedKey = game.isGameOver() ? `${game.fen()}-${moveRecords.length}` : "";
     if (finishedKey && savedGameKey === finishedKey) {
-      setNotice("This finished game is already saved.");
+      setNotice(t.alreadySaved);
       return;
     }
     await saveGameRecord({
       userId: user?.uid,
       opponent: mode === "ai" ? "Stockfish" : mode === "online" ? `Room ${roomId}` : "Local player",
       pgn: moveRecords.map((move) => move.san).join(" "),
-      result,
+      result: translatedResult(result, t),
       fenHistory: fenHistoryString(moveRecords),
       finalFen: game.fen(),
       scoreDelta: delta
@@ -535,8 +626,8 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
     if (finishedKey) setSavedGameKey(finishedKey);
     setNotice(
       user
-        ? `${auto ? "Finished game auto-saved" : "Game saved"} to Firestore. Rating ${delta >= 0 ? "+" : ""}${delta}.`
-        : "Sign in to save progress."
+        ? `${auto ? t.finishedAutoSaved : t.savedFirestore} Rating ${delta >= 0 ? "+" : ""}${delta}.`
+        : t.signInProgress
     );
   }
 
@@ -549,13 +640,13 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
     setSavedGameKey("");
     setResultDialog(null);
     setSelected(null);
-    setNotice("New game started.");
+    setNotice(t.newGameStarted);
     setCoachLine(null);
     setSuggestedMove(null);
   }
 
   function analyze() {
-    setCoachText("Coach is calculating...");
+    setCoachText(t.coachCalculating);
     setSuggestedMove(null);
     analysisRequestedRef.current = true;
     engineRef.current?.setSkill(isPro ? 5 : 2);
@@ -574,6 +665,48 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  if (requireAuth && !firebaseEnabled) {
+    return (
+      <main className="flex min-h-screen items-center justify-center px-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{t.login}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Authentication is not configured for this deployment yet.
+            </p>
+            <Button className="w-full" variant="outline" asChild>
+              <Link href="/">{t.backHome}</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </main>
+    );
+  }
+
+  if (requireAuth && (loading || !user)) {
+    return (
+      <main className="flex min-h-screen items-center justify-center px-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{loading ? "Checking account" : t.login}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              {loading ? "Please wait while we check your session." : "Redirecting to sign in."}
+            </p>
+            {!loading ? (
+              <Button className="w-full" asChild>
+                <Link href="/login">{t.login}</Link>
+              </Button>
+            ) : null}
+          </CardContent>
+        </Card>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen">
@@ -596,7 +729,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
           <div>
             <h1 className="text-3xl font-bold tracking-normal"><Link href="/">ChessLift</Link></h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Legal chess, AI sparring, realtime friend rooms, progress history, city rankings, and Pro upgrades.
+              {t.legalChessSubtitle}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -605,30 +738,30 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
             </Button>
             {user ? (
               <Button variant="outline" onClick={() => void signOutUser()}>
-                <LogOut className="h-4 w-4" /> Sign out
+                <LogOut className="h-4 w-4" /> {t.signOut}
               </Button>
             ) : (
               <>
                 <Button variant="outline" asChild>
                   <Link href="/login">
-                    <LogIn className="h-4 w-4" /> Login
+                    <LogIn className="h-4 w-4" /> {t.login}
                   </Link>
                 </Button>
                 <Button asChild>
                   <Link href="/register">
-                    <LogIn className="h-4 w-4" /> Register
+                    <LogIn className="h-4 w-4" /> {t.register}
                   </Link>
                 </Button>
               </>
             )}
             <Button variant={view === "profile" ? "default" : "outline"} asChild>
               <Link href={view === "profile" ? "/play/stockfish" : "/profile"}>
-                <Users className="h-4 w-4" /> {view === "profile" ? "Board" : "Profile"}
+                <Users className="h-4 w-4" /> {view === "profile" ? t.board : t.profile}
               </Link>
             </Button>
             <Button variant="secondary" asChild>
               <Link href="/pro">
-                <Crown className="h-4 w-4" /> Pro
+                <Crown className="h-4 w-4" /> {t.pro}
               </Link>
             </Button>
           </div>
@@ -639,47 +772,95 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
         <section className="mx-auto grid max-w-7xl gap-5 px-4 py-5 lg:grid-cols-[360px_1fr]">
           <Card>
             <CardHeader>
-              <CardTitle>Profile</CardTitle>
+              <CardTitle>{t.profile}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {user ? (
                 <>
                   <div className="space-y-1">
-                    <div className="text-sm text-muted-foreground">Name</div>
+                    <div className="text-sm text-muted-foreground">{t.name}</div>
                     <div className="font-semibold">{user.displayName || "Guest player"}</div>
                   </div>
                   <div className="space-y-1">
-                    <div className="text-sm text-muted-foreground">Email</div>
+                    <div className="text-sm text-muted-foreground">{t.email}</div>
                     <div className="break-words font-semibold">{user.email || "Anonymous account"}</div>
                   </div>
                   <div className="space-y-1">
-                    <div className="text-sm text-muted-foreground">City</div>
+                    <div className="text-sm text-muted-foreground">{t.city}</div>
                     <Input value={city} onChange={(event) => setCity(event.target.value)} />
                   </div>
                   <div className="rounded-md bg-muted p-3 text-sm">
-                    Games saved: <span className="font-semibold">{savedGames.length}</span>
+                    {t.gamesSaved}: <span className="font-semibold">{savedGames.length}</span>
                   </div>
                   <div className="space-y-2">
-                    <div className="text-sm font-semibold">Piece style</div>
-                    <div className="grid grid-cols-3 gap-2">
-                      {(["classic", "neo", "mono"] as const).map((style) => (
+                    <div className="text-sm font-semibold">{t.language}</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {([
+                        ["en", "English"],
+                        ["kk", "Қазақша"],
+                        ["ru", "Русский"],
+                        ["fr", "Français"]
+                      ] as const).map(([language, label]) => (
                         <Button
-                          key={style}
-                          variant={pieceStyle === style ? "default" : "outline"}
+                          key={language}
+                          variant={activeLanguage === language ? "default" : "outline"}
                           size="sm"
-                          disabled={style !== "classic" && !isPro}
-                          onClick={() => void setUserPieceStyle(user.uid, style)}
+                          disabled={language !== "en" && !isPro}
+                          onClick={() => void setUserLanguage(user.uid, language)}
                         >
-                          {style}
+                          {label}
                         </Button>
                       ))}
                     </div>
-                    {!isPro ? <p className="text-xs text-muted-foreground">Neo and Mono are Pro styles.</p> : null}
+                    {!isPro ? <p className="text-xs text-muted-foreground">{t.languageLocked}</p> : null}
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-sm font-semibold">{t.pieceStyle}</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(["classic", "cburnett", "noto", "alpha", "merida"] as const).map((style) => {
+                        const label =
+                          style === "cburnett" ? "Cburnett" : style === "noto" ? "Noto" : style === "alpha" ? "Alpha" : style === "merida" ? "Merida" : "Classic";
+                        const proLocked = (style === "cburnett" || style === "noto") && !isPro;
+                        const paidLocked = (style === "alpha" || style === "merida") && !purchasedPieceStyles.includes(style);
+
+                        if (paidLocked) {
+                          return (
+                            <Button
+                              key={style}
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                void startPieceStyleCheckout(style, user.uid).catch((error) =>
+                                  setNotice(error instanceof Error ? error.message : "Could not start checkout.")
+                                )
+                              }
+                            >
+                              {t.buyStyle.replace("{style}", label)}
+                            </Button>
+                          );
+                        }
+
+                        return (
+                          <Button
+                            key={style}
+                            variant={pieceStyle === style ? "default" : "outline"}
+                            size="sm"
+                            disabled={proLocked}
+                            onClick={() => void setUserPieceStyle(user.uid, style)}
+                          >
+                            {label}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                    {!isPro ? <p className="text-xs text-muted-foreground">{t.proStylesLocked}</p> : null}
+                    <p className="text-xs text-muted-foreground">{t.paidStylesNote}</p>
+                    <p className="text-xs text-muted-foreground">{t.assetNote}</p>
                   </div>
                 </>
               ) : (
                 <div className="space-y-3">
-                  <p className="text-sm text-muted-foreground">Sign in to save games and see your profile.</p>
+                  <p className="text-sm text-muted-foreground">{t.signInToSave}</p>
                   <Button className="w-full" onClick={() => void signInGoogle()} disabled={!firebaseEnabled}>
                     <LogIn className="h-4 w-4" /> Sign in
                   </Button>
@@ -690,7 +871,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
 
           <Card>
             <CardHeader>
-              <CardTitle>All Games</CardTitle>
+              <CardTitle>{t.allGames}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               {savedGames.length ? (
@@ -712,14 +893,14 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div>
                             <div className="font-semibold">{saved.opponent}</div>
-                            <div className="text-muted-foreground">{saved.result}</div>
+                            <div className="text-muted-foreground">{translatedResult(saved.result, t)}</div>
                           </div>
                           <div className="flex items-center gap-2">
                             <Badge>{saved.scoreDelta >= 0 ? "+" : ""}{saved.scoreDelta}</Badge>
                             <Button
                               variant="outline"
                               size="icon"
-                              title={expanded ? "Use compact board" : "Use large board"}
+                            title={expanded ? t.useCompactBoard : t.useLargeBoard}
                               onClick={() => setExpandedGameId(expanded ? null : saved.id)}
                             >
                               <Maximize2 className="h-4 w-4" />
@@ -735,7 +916,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
                             }
                             disabled={currentPly === 0}
                           >
-                            Back
+                            {t.back}
                           </Button>
                           <Badge>
                             {currentPly} / {Math.max(0, fens.length - 1)}
@@ -748,14 +929,14 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
                             }
                             disabled={currentPly >= fens.length - 1}
                           >
-                            Forward
+                            {t.forward}
                           </Button>
                         </div>
                         <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
-                          {saved.pgn || "No PGN stored"}
+                          {saved.pgn || t.noPgn}
                         </div>
                         <details>
-                          <summary className="cursor-pointer text-xs font-semibold text-muted-foreground">Current FEN</summary>
+                          <summary className="cursor-pointer text-xs font-semibold text-muted-foreground">{t.currentFen}</summary>
                           <pre className="mt-2 max-h-24 overflow-auto rounded-md bg-muted p-3 text-xs">{currentFen}</pre>
                         </details>
                       </div>
@@ -763,7 +944,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
                   );
                 })
               ) : (
-                <p className="text-sm text-muted-foreground">No saved games yet. Finished games are saved automatically after sign-in.</p>
+                <p className="text-sm text-muted-foreground">{t.noSavedGames}</p>
               )}
             </CardContent>
           </Card>
@@ -776,37 +957,37 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
               <>
                 <Button variant={mode === "local" ? "default" : "outline"} asChild>
                   <Link href="/play/local">
-                    <Users className="h-4 w-4" /> Local
+                    <Users className="h-4 w-4" /> {t.local}
                   </Link>
                 </Button>
                 <Button variant={mode === "ai" ? "default" : "outline"} asChild>
                   <Link href="/play/stockfish">
-                    <Bot className="h-4 w-4" /> Stockfish
+                    <Bot className="h-4 w-4" /> {t.stockfish}
                   </Link>
                 </Button>
               </>
             )}
             {mode === "ai" ? (
               <Button variant="outline" onClick={() => switchAiColor(aiPlayerColor === "w" ? "b" : "w")}>
-                <Swords className="h-4 w-4" /> Play {aiPlayerColor === "w" ? "Black" : "White"}
+                <Swords className="h-4 w-4" /> {aiPlayerColor === "w" ? t.playBlack : t.playWhite}
               </Button>
             ) : null}
             {lockedMode ? null : (
               <Button variant={mode === "online" ? "default" : "outline"} asChild>
                 <Link href="/play/friend">
-                  <LinkIcon className="h-4 w-4" /> Friend link
+                  <LinkIcon className="h-4 w-4" /> {t.multiplayer}
                 </Link>
               </Button>
             )}
             {mode === "online" ? (
               <Button variant="outline" onClick={createRoom}>
-                <LinkIcon className="h-4 w-4" /> Create room
+                <LinkIcon className="h-4 w-4" /> {t.createRoom}
               </Button>
             ) : null}
-            <Button variant="outline" size="icon" title="Reset board" onClick={() => resetBoard()}>
+            <Button variant="outline" size="icon" title={t.resetBoard} onClick={() => resetBoard()}>
               <RotateCcw className="h-4 w-4" />
             </Button>
-            <Button variant="outline" size="icon" title="Save game" onClick={() => void persistFinishedGame(false)}>
+            <Button variant="outline" size="icon" title={t.saveGame} onClick={() => void persistFinishedGame(false)}>
               <Save className="h-4 w-4" />
             </Button>
           </div>
@@ -815,10 +996,10 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
             <div className="rounded-lg border bg-card p-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="text-sm font-semibold">Enemy Stockfish Difficulty</div>
-                  <div className="text-xs text-muted-foreground">Controls only the opponent you play against.</div>
+                  <div className="text-sm font-semibold">{t.enemyDifficulty}</div>
+                  <div className="text-xs text-muted-foreground">{t.enemyHelp}</div>
                 </div>
-                <Badge>Level {aiDifficulty}</Badge>
+                <Badge>{t.level} {aiDifficulty}</Badge>
               </div>
               <input
                 type="range"
@@ -830,8 +1011,8 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
                 aria-label="Enemy Stockfish difficulty"
               />
               <div className="mt-1 flex justify-between text-xs text-muted-foreground">
-                <span>Easy opponent</span>
-                <span>Strong opponent</span>
+                <span>{t.easy}</span>
+                <span>{t.strong}</span>
               </div>
             </div>
           ) : null}
@@ -891,12 +1072,12 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-sm">
-            <Badge>{status}</Badge>
-            <Badge>{game.turn() === "w" ? "White" : "Black"} to move</Badge>
-            <Badge>You: {activePlayerColor === "w" ? "White" : "Black"}</Badge>
+            <Badge>{translatedResult(status, t)}</Badge>
+            <Badge>{game.turn() === "w" ? t.whiteToMove : t.blackToMove}</Badge>
+            <Badge>{t.you}: {activePlayerColor === "w" ? t.white : t.black}</Badge>
             <Badge>{mode}</Badge>
-            {reviewPly !== null ? <Badge>Viewing ply {reviewPly}</Badge> : null}
-            <Badge>{mode === "online" ? `Socket: ${socketStatus}` : "Socket: connects for friend rooms"}</Badge>
+            {reviewPly !== null ? <Badge>{t.viewingPly.replace("{ply}", String(reviewPly))}</Badge> : null}
+            <Badge>{mode === "online" ? `Socket: ${socketStatus}` : t.socketFriend}</Badge>
             {notice ? <span className="text-muted-foreground">{notice}</span> : null}
           </div>
         </div>
@@ -904,34 +1085,34 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
         <div className="grid gap-4">
           <Card>
             <CardHeader>
-              <CardTitle>AI Coach</CardTitle>
+              <CardTitle>{t.aiCoach}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm text-muted-foreground">{coachText}</p>
               {coachLine ? (
                 <div className="rounded-md bg-muted p-3 text-sm">
-                  Depth {coachLine.depth} | Eval {coachLine.score}
+                  {t.depth} {coachLine.depth} | {t.eval} {coachLine.score}
                   <div className="mt-1 break-words text-muted-foreground">{coachLine.pv}</div>
                 </div>
               ) : null}
               <Button className="w-full" onClick={analyze}>
-                <BrainCircuit className="h-4 w-4" /> Analyze position
+                <BrainCircuit className="h-4 w-4" /> {t.analyze}
               </Button>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle>Multiplayer</CardTitle>
+              <CardTitle>{t.multiplayer}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex gap-2">
-                <Input value={joinCode} onChange={(event) => setJoinCode(event.target.value)} placeholder="Room code" />
-                <Button onClick={() => joinRoom()}>Join</Button>
+                <Input value={joinCode} onChange={(event) => setJoinCode(event.target.value)} placeholder={t.roomCode} />
+                <Button onClick={() => joinRoom()}>{t.join}</Button>
               </div>
               {roomId ? (
                 <div className="rounded-md bg-muted p-3 text-sm">
-                  Room <strong>{roomId}</strong>
+                  {t.room} <strong>{roomId}</strong>
                   <div className="mt-1 break-words text-muted-foreground">{shareUrl}</div>
                 </div>
               ) : null}
@@ -940,10 +1121,10 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
 
           <Card>
             <CardHeader>
-              <CardTitle>Global Leaderboard</CardTitle>
+              <CardTitle>{t.leaderboard}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <Input value={city} onChange={(event) => setCity(event.target.value)} placeholder="Your city" />
+              <Input value={city} onChange={(event) => setCity(event.target.value)} placeholder={t.yourCity} />
               <div className="space-y-2">
                 {leaderboard.length ? (
                   leaderboard.map((player, index) => (
@@ -953,7 +1134,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
                     </div>
                   ))
                 ) : (
-                  <p className="text-sm text-muted-foreground">No Firestore scores yet. Wins add 10 points, losses subtract 5.</p>
+                  <p className="text-sm text-muted-foreground">{t.noScores}</p>
                 )}
               </div>
             </CardContent>
@@ -961,15 +1142,15 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
 
           <Card>
             <CardHeader>
-              <CardTitle>Move History</CardTitle>
+              <CardTitle>{t.moveHistory}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex gap-2">
                 <Button variant={reviewPly === null ? "default" : "outline"} size="sm" onClick={() => setReviewPly(null)}>
-                  Live
+                  {t.live}
                 </Button>
                 <Button variant={reviewPly === 0 ? "default" : "outline"} size="sm" onClick={() => setReviewPly(0)}>
-                  Start
+                  {t.start}
                 </Button>
               </div>
               <div className="grid max-h-44 grid-cols-2 gap-2 overflow-auto text-sm md:grid-cols-3">
@@ -987,10 +1168,10 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
                     </button>
                   ))
                 ) : (
-                  <p className="text-sm text-muted-foreground">No moves yet.</p>
+                  <p className="text-sm text-muted-foreground">{t.noMoves}</p>
                 )}
               </div>
-              <p className="text-xs text-muted-foreground">Click a move to inspect that old position. The live game is unchanged.</p>
+              <p className="text-xs text-muted-foreground">{t.clickMoveHelp}</p>
             </CardContent>
           </Card>
 
