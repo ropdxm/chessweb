@@ -1263,27 +1263,25 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
         </div>
 
         <div className="grid gap-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>{t.aiCoach}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-sm text-muted-foreground">{coachText}</p>
-              {mode === "online" && onlineGameKind === "random" ? (
-                <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-                  {t.coachUnavailableRandom}
-                </div>
-              ) : coachLine ? (
-                <div className="rounded-md bg-muted p-3 text-sm">
-                  {t.depth} {coachLine.depth} | {t.eval} {coachLine.score}
-                  <div className="mt-1 break-words text-muted-foreground">{coachLine.pv}</div>
-                </div>
-              ) : null}
-              <Button className="w-full" onClick={analyze} disabled={mode === "online" && onlineGameKind === "random"}>
-                <BrainCircuit className="h-4 w-4" /> {t.analyze}
-              </Button>
-            </CardContent>
-          </Card>
+          {mode === "online" && onlineGameKind === "random" ? null : (
+            <Card>
+              <CardHeader>
+                <CardTitle>{t.aiCoach}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm text-muted-foreground">{coachText}</p>
+                {coachLine ? (
+                  <div className="rounded-md bg-muted p-3 text-sm">
+                    {t.depth} {coachLine.depth} | {t.eval} {coachLine.score}
+                    <div className="mt-1 break-words text-muted-foreground">{coachLine.pv}</div>
+                  </div>
+                ) : null}
+                <Button className="w-full" onClick={analyze}>
+                  <BrainCircuit className="h-4 w-4" /> {t.analyze}
+                </Button>
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader>
@@ -1308,13 +1306,17 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                   <p className="text-xs text-muted-foreground">{t.timeControlHelp}</p>
                 </div>
               ) : null}
-              <div className="flex gap-2">
-                <Input value={joinCode} onChange={(event) => setJoinCode(event.target.value)} placeholder={t.roomCode} />
-                <Button onClick={() => joinRoom()}>{t.join}</Button>
-              </div>
-              <Button className="w-full" variant="outline" onClick={findRandomPlayer} disabled={matchmaking}>
-                <Search className="h-4 w-4" /> {matchmaking ? t.searchingRandom : t.findRandomPlayer}
-              </Button>
+              {onlineGameKind === "friend" ? (
+                <div className="flex gap-2">
+                  <Input value={joinCode} onChange={(event) => setJoinCode(event.target.value)} placeholder={t.roomCode} />
+                  <Button onClick={() => joinRoom()}>{t.join}</Button>
+                </div>
+              ) : null}
+              {onlineGameKind === "random" ? (
+                <Button className="w-full" variant="outline" onClick={findRandomPlayer} disabled={matchmaking}>
+                  <Search className="h-4 w-4" /> {matchmaking ? t.searchingRandom : t.findRandomPlayer}
+                </Button>
+              ) : null}
               {roomId ? (
                 <div className="rounded-md bg-muted p-3 text-sm">
                   {onlineGameKind === "random" ? t.randomMatch : t.room} <strong>{roomId}</strong>
