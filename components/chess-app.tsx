@@ -354,11 +354,12 @@ function MiniBoard({ fen, large = false, pieceStyle = "classic" }: { fen: string
 type ChessAppProps = {
   initialMode?: Mode;
   initialView?: "play" | "profile";
+  initialOnlineKind?: "friend" | "random";
   lockedMode?: boolean;
   requireAuth?: boolean;
 };
 
-export default function ChessApp({ initialMode = "ai", initialView = "play", lockedMode = false, requireAuth = false }: ChessAppProps) {
+export default function ChessApp({ initialMode = "ai", initialView = "play", initialOnlineKind = "friend", lockedMode = false, requireAuth = false }: ChessAppProps) {
   const router = useRouter();
   const [game, setGame] = useState(() => new Chess());
   const [moveRecords, setMoveRecords] = useState<MoveRecord[]>([]);
@@ -376,7 +377,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
   const [playerColor, setPlayerColor] = useState<"w" | "b">("w");
   const [aiPlayerColor, setAiPlayerColor] = useState<"w" | "b">("w");
   const [socketStatus, setSocketStatus] = useState("offline");
-  const [onlineGameKind, setOnlineGameKind] = useState<"friend" | "random">("friend");
+  const [onlineGameKind, setOnlineGameKind] = useState<"friend" | "random">(initialOnlineKind);
   const [matchmaking, setMatchmaking] = useState(false);
   const [onlinePlayers, setOnlinePlayers] = useState<Partial<Record<"w" | "b", string>>>({});
   const [notice, setNotice] = useState("");
@@ -732,6 +733,13 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", loc
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!requireAuth || loading || !user || initialMode !== "online" || initialOnlineKind !== "random") return;
+    if (roomId || matchmaking || socketStatus === "connecting") return;
+    findRandomPlayer();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialMode, initialOnlineKind, loading, matchmaking, requireAuth, roomId, socketStatus, user]);
 
   if (requireAuth && !firebaseEnabled) {
     return (
