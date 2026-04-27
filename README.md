@@ -10,6 +10,28 @@ ChessLift - это веб-приложение для игры и трениро
 
 Ценность ChessLift в том, что он объединяет игру, обучение, социальные функции и прогресс в одном месте: пользователь не просто играет партию, а видит свою историю, развивает рейтинг, приглашает друзей и получает больше причин возвращаться к тренировкам.
 
+## Screenshots
+
+### Home dashboard
+
+![Home dashboard](docs/screenshots/home-dashboard.png)
+
+### Multiplayer chess board
+
+![Multiplayer chess board](docs/screenshots/multiplayer-board.png)
+
+### Profile, friends, and saved games
+
+![Profile, friends, and saved games](docs/screenshots/profile-friends-games.png)
+
+### Friend chat with image messages
+
+![Friend chat with image messages](docs/screenshots/friend-chat.png)
+
+### Stripe checkout for Pro
+
+![Stripe checkout for Pro](docs/screenshots/stripe-checkout.png)
+
 ## Features
 
 - Legal chess moves and game-state validation with `chess.js`.
