@@ -43,6 +43,7 @@ import {
   setUserLanguage,
   uploadProfileImage,
   updateLeaderboard,
+  updateUserPresence,
   upsertUserProfile,
   useFirebaseUser,
   useFriendRequests,
@@ -276,6 +277,18 @@ function reviewIndex(reviewPly: number | null, moveCount: number) {
   return reviewPly === null ? moveCount : reviewPly;
 }
 
+function lastSeenMillis(value?: { seconds?: number; toMillis?: () => number }) {
+  if (!value) return 0;
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (typeof value.seconds === "number") return value.seconds * 1000;
+  return 0;
+}
+
+function isRecentlyOnline(value: { seconds?: number; toMillis?: () => number } | undefined, now: number) {
+  const seenAt = lastSeenMillis(value);
+  return Boolean(seenAt && now - seenAt < 90_000);
+}
+
 const enginePieceValues: Record<string, number> = {
   p: 100,
   n: 320,
@@ -453,6 +466,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   const [showAllPieceStyles, setShowAllPieceStyles] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [profileImageOpen, setProfileImageOpen] = useState(false);
+  const [presenceNow, setPresenceNow] = useState(() => Date.now());
   const analysisRequestedRef = useRef(false);
   const engineRef = useRef<ReturnType<typeof createStockfish> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -514,6 +528,20 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   useEffect(() => {
     if (user) void upsertUserProfile(user, city);
   }, [city, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    void updateUserPresence(user.uid);
+    const heartbeat = window.setInterval(() => {
+      void updateUserPresence(user.uid);
+      setPresenceNow(Date.now());
+    }, 30_000);
+    const ticker = window.setInterval(() => setPresenceNow(Date.now()), 10_000);
+    return () => {
+      window.clearInterval(heartbeat);
+      window.clearInterval(ticker);
+    };
+  }, [user]);
 
   useEffect(() => {
     if (profile?.nick) setNickInput(profile.nick);
@@ -1104,7 +1132,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
-                      className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-md border bg-muted transition hover:border-primary"
+                      className="relative grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-md border bg-muted transition hover:border-primary"
                       title="Open profile image"
                       onClick={() => setProfileImageOpen(true)}
                     >
@@ -1113,6 +1141,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                       ) : (
                         <Users className="h-6 w-6 text-muted-foreground" />
                       )}
+                      <span className="absolute bottom-1 right-1 h-3.5 w-3.5 rounded-full border-2 border-card bg-emerald-500" />
                     </button>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold">Profile image</div>
@@ -1399,10 +1428,25 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                       {friends.map((friend) => (
                         <div key={friend.id} className="rounded-md border bg-background p-3 text-sm">
                           <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <div className="font-semibold">{friend.name}</div>
-                              <div className="text-muted-foreground">@{friend.nick || "player"}</div>
-                              <Badge className="mt-2">{friend.score || 0}</Badge>
+                            <div className="flex min-w-0 gap-3">
+                              <div className="relative grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-md border bg-muted">
+                                {friend.avatarUrl ? (
+                                  <img src={friend.avatarUrl} alt="" className="h-full w-full object-cover" />
+                                ) : (
+                                  <Users className="h-5 w-5 text-muted-foreground" />
+                                )}
+                                {isRecentlyOnline(friend.lastSeenAt, presenceNow) ? (
+                                  <span className="absolute bottom-0.5 right-0.5 h-3 w-3 rounded-full border-2 border-card bg-emerald-500" />
+                                ) : null}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="truncate font-semibold">{friend.name}</div>
+                                <div className="truncate text-muted-foreground">@{friend.nick || "player"}</div>
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  <Badge>{friend.score || 0}</Badge>
+                                  <Badge>{isRecentlyOnline(friend.lastSeenAt, presenceNow) ? t.online : t.offline}</Badge>
+                                </div>
+                              </div>
                             </div>
                             <div className="flex flex-col gap-2">
                               <Button size="sm" onClick={() => void inviteFriendToPlay(friend.id)}>

@@ -86,6 +86,7 @@ export type UserProfile = {
   city: string;
   cityKey: string;
   score?: number;
+  lastSeenAt?: { seconds?: number; toMillis?: () => number };
   pro?: boolean;
   pieceStyle?: "cburnett" | "noto" | "neo" | "mono" | "alpha" | "merida" | "california" | "cardinal" | "pixel";
   purchasedPieceStyles?: string[];
@@ -101,6 +102,7 @@ export type Friend = {
   avatarUrl?: string;
   city?: string;
   score?: number;
+  lastSeenAt?: { seconds?: number; toMillis?: () => number };
 };
 
 export type FriendRequest = Friend & {
@@ -246,7 +248,7 @@ export async function upsertUserProfile(user: User, city: string) {
       name: user.displayName || "Guest player",
       nick,
       nickKey: normalizeNick(nick),
-      avatarUrl: existing.exists() ? data?.avatarUrl || "" : "",
+      avatarUrl: existing.exists() ? data?.avatarUrl || user.photoURL || "" : user.photoURL || "",
       city,
       cityKey: city.toLowerCase(),
       score: existing.exists() ? data?.score || 0 : 0,
@@ -367,12 +369,46 @@ export function useFriends(userId?: string) {
       setFriends([]);
       return;
     }
-    return onSnapshot(collection(db, "users", userId, "friends"), (snapshot) => {
-      setFriends(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Omit<Friend, "id">) })));
+    let profileUnsubscribes: Array<() => void> = [];
+    const unsubscribeFriends = onSnapshot(collection(db, "users", userId, "friends"), (snapshot) => {
+      profileUnsubscribes.forEach((unsubscribe) => unsubscribe());
+      profileUnsubscribes = [];
+      const nextFriends = snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Omit<Friend, "id">) }));
+      setFriends(nextFriends);
+      profileUnsubscribes = nextFriends.map((friend) =>
+        onSnapshot(doc(db, "users", friend.id), (profileSnapshot) => {
+          if (!profileSnapshot.exists()) return;
+          const data = profileSnapshot.data() as UserProfile;
+          setFriends((current) =>
+            current.map((item) =>
+              item.id === friend.id
+                ? {
+                    ...item,
+                    name: data.name || item.name,
+                    nick: data.nick || item.nick,
+                    avatarUrl: data.avatarUrl || item.avatarUrl,
+                    city: data.city || item.city,
+                    score: data.score || item.score || 0,
+                    lastSeenAt: data.lastSeenAt
+                  }
+                : item
+            )
+          );
+        })
+      );
     });
+    return () => {
+      unsubscribeFriends();
+      profileUnsubscribes.forEach((unsubscribe) => unsubscribe());
+    };
   }, [userId]);
 
   return friends;
+}
+
+export async function updateUserPresence(userId: string | undefined) {
+  if (!db || !userId) return;
+  await setDoc(doc(db, "users", userId), { lastSeenAt: serverTimestamp() }, { merge: true });
 }
 
 export async function deleteFriend(userId: string | undefined, friendId: string | undefined) {
@@ -492,7 +528,8 @@ async function friendSnapshot(userId: string) {
     nick: data.nick,
     avatarUrl: data.avatarUrl,
     city: data.city,
-    score: data.score || 0
+    score: data.score || 0,
+    lastSeenAt: data.lastSeenAt
   };
 }
 
