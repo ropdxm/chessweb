@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Crown, Home, LogIn, Moon, Sun, UserRound } from "lucide-react";
+import { Crown, Home, LogIn, MessageCircle, Moon, Sun, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useFirebaseUser } from "@/lib/firebase";
 import { useI18n } from "@/lib/i18n";
@@ -40,6 +40,13 @@ export function AppNavbar() {
               <Crown className="h-4 w-4" />
             </Link>
           </Button>
+          {user ? (
+            <Button variant="ghost" asChild>
+              <Link href="/chat" title="Chat" aria-label="Chat">
+                <MessageCircle className="h-4 w-4" />
+              </Link>
+            </Button>
+          ) : null}
           {user ? (
             <Button variant="outline" asChild>
               <Link href="/profile" title={t.profile} aria-label={t.profile}>

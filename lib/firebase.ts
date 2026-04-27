@@ -15,8 +15,10 @@ import {
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
+  getDocs,
   getFirestore,
   increment,
   limit,
@@ -25,7 +27,8 @@ import {
   query,
   serverTimestamp,
   setDoc,
-  updateDoc,
+  startAt,
+  endAt,
   where
 } from "firebase/firestore";
 import { useEffect, useState } from "react";
@@ -75,8 +78,11 @@ export type SavedGame = {
 
 export type UserProfile = {
   name: string;
+  nick?: string;
+  nickKey?: string;
   city: string;
   cityKey: string;
+  score?: number;
   pro?: boolean;
   pieceStyle?: "cburnett" | "noto" | "neo" | "mono" | "alpha" | "merida" | "california" | "cardinal" | "pixel";
   purchasedPieceStyles?: string[];
@@ -84,6 +90,55 @@ export type UserProfile = {
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
 };
+
+export type Friend = {
+  id: string;
+  name: string;
+  nick?: string;
+  city?: string;
+  score?: number;
+};
+
+export type FriendRequest = Friend & {
+  fromUserId: string;
+};
+
+export type UserSearchResult = Friend;
+
+export type GameInvite = {
+  id: string;
+  roomId: string;
+  fromUserId: string;
+  fromName: string;
+  fromNick?: string;
+  link: string;
+  status?: "pending" | "accepted";
+};
+
+export type ChatMessage = {
+  id: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  createdAt?: { seconds: number };
+};
+
+function normalizeNick(value: string) {
+  return value.trim().toLowerCase().replace(/^@+/, "");
+}
+
+function profileNick(user: User, existing?: Record<string, unknown>) {
+  const currentNick = typeof existing?.nick === "string" ? existing.nick : "";
+  if (currentNick) return currentNick;
+  const displayNick = user.displayName?.trim().replace(/\s+/g, "");
+  if (displayNick) return displayNick;
+  const emailNick = user.email?.split("@")[0]?.trim();
+  return emailNick || `player-${user.uid.slice(0, 6)}`;
+}
+
+export function chatThreadId(firstUserId: string, secondUserId: string) {
+  return [firstUserId, secondUserId].sort().join("_");
+}
 
 export function useFirebaseUser() {
   const [user, setUser] = useState<User | null>(null);
@@ -151,18 +206,37 @@ export async function signOutUser() {
 export async function upsertUserProfile(user: User, city: string) {
   if (!db) return;
   const existing = await getDoc(doc(db, "users", user.uid));
+  const data = existing.exists() ? existing.data() : undefined;
+  const nick = profileNick(user, data);
   await setDoc(
     doc(db, "users", user.uid),
     {
       name: user.displayName || "Guest player",
+      nick,
+      nickKey: normalizeNick(nick),
       city,
       cityKey: city.toLowerCase(),
-      score: existing.exists() ? existing.data().score || 0 : 0,
-      pro: existing.exists() ? Boolean(existing.data().pro) : false,
-      pieceStyle: existing.exists() ? existing.data().pieceStyle || "noto" : "noto",
-      purchasedPieceStyles: existing.exists() ? existing.data().purchasedPieceStyles || [] : [],
-      language: existing.exists() ? existing.data().language || "en" : "en",
+      score: existing.exists() ? data?.score || 0 : 0,
+      pro: existing.exists() ? Boolean(data?.pro) : false,
+      pieceStyle: existing.exists() ? data?.pieceStyle || "noto" : "noto",
+      purchasedPieceStyles: existing.exists() ? data?.purchasedPieceStyles || [] : [],
+      language: existing.exists() ? data?.language || "en" : "en",
       lastSeenAt: serverTimestamp()
+    },
+    { merge: true }
+  );
+}
+
+export async function setUserNick(userId: string | undefined, nick: string) {
+  if (!db || !userId) return;
+  const cleanNick = nick.trim().replace(/^@+/, "");
+  if (!cleanNick) return;
+  await setDoc(
+    doc(db, "users", userId),
+    {
+      nick: cleanNick,
+      nickKey: normalizeNick(cleanNick),
+      updatedAt: serverTimestamp()
     },
     { merge: true }
   );
@@ -239,6 +313,200 @@ export function useSavedGames(userId?: string) {
   }, [userId]);
 
   return games;
+}
+
+export function useFriends(userId?: string) {
+  const [friends, setFriends] = useState<Friend[]>([]);
+
+  useEffect(() => {
+    if (!db || !userId) {
+      setFriends([]);
+      return;
+    }
+    return onSnapshot(collection(db, "users", userId, "friends"), (snapshot) => {
+      setFriends(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Omit<Friend, "id">) })));
+    });
+  }, [userId]);
+
+  return friends;
+}
+
+export function useFriendRequests(userId?: string) {
+  const [requests, setRequests] = useState<FriendRequest[]>([]);
+
+  useEffect(() => {
+    if (!db || !userId) {
+      setRequests([]);
+      return;
+    }
+    return onSnapshot(collection(db, "users", userId, "friendRequests"), (snapshot) => {
+      setRequests(
+        snapshot.docs.map((entry) => ({
+          id: entry.id,
+          fromUserId: entry.id,
+          ...(entry.data() as Omit<FriendRequest, "id" | "fromUserId">)
+        }))
+      );
+    });
+  }, [userId]);
+
+  return requests;
+}
+
+export function useGameInvites(userId?: string) {
+  const [invites, setInvites] = useState<GameInvite[]>([]);
+
+  useEffect(() => {
+    if (!db || !userId) {
+      setInvites([]);
+      return;
+    }
+    const q = query(collection(db, "users", userId, "gameInvites"), orderBy("createdAt", "desc"), limit(10));
+    return onSnapshot(q, (snapshot) => {
+      setInvites(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Omit<GameInvite, "id">) })));
+    });
+  }, [userId]);
+
+  return invites;
+}
+
+export function useChatMessages(userId?: string, friendId?: string) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+  useEffect(() => {
+    if (!db || !userId || !friendId) {
+      setMessages([]);
+      return;
+    }
+    const threadId = chatThreadId(userId, friendId);
+    const q = query(collection(db, "chats", threadId, "messages"), orderBy("createdAt", "asc"), limit(100));
+    return onSnapshot(q, (snapshot) => {
+      setMessages(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as Omit<ChatMessage, "id">) })));
+    });
+  }, [friendId, userId]);
+
+  return messages;
+}
+
+export async function searchUsersByNick(input: string, currentUserId?: string) {
+  if (!db) return [];
+  const nickKey = normalizeNick(input);
+  if (nickKey.length < 2) return [];
+  const q = query(collection(db, "users"), orderBy("nickKey"), startAt(nickKey), endAt(`${nickKey}\uf8ff`), limit(8));
+  const snapshot = await getDocs(q);
+  return snapshot.docs
+    .filter((entry) => entry.id !== currentUserId)
+    .map((entry) => {
+      const data = entry.data() as UserProfile;
+      return {
+        id: entry.id,
+        name: data.name || "Guest player",
+        nick: data.nick,
+        city: data.city,
+        score: data.score || 0
+      };
+    });
+}
+
+async function friendSnapshot(userId: string) {
+  const snapshot = await getDoc(doc(db!, "users", userId));
+  if (!snapshot.exists()) return null;
+  const data = snapshot.data() as UserProfile;
+  return {
+    name: data.name || "Guest player",
+    nick: data.nick,
+    city: data.city,
+    score: data.score || 0
+  };
+}
+
+export async function sendFriendRequest(fromUserId: string | undefined, toUserId: string | undefined) {
+  if (!db || !fromUserId || !toUserId || fromUserId === toUserId) return;
+  const [fromProfile, toProfile] = await Promise.all([friendSnapshot(fromUserId), friendSnapshot(toUserId)]);
+  if (!fromProfile || !toProfile) throw new Error("User was not found.");
+  const existingFriend = await getDoc(doc(db, "users", fromUserId, "friends", toUserId));
+  if (existingFriend.exists()) throw new Error("This user is already your friend.");
+  await setDoc(
+    doc(db, "users", toUserId, "friendRequests", fromUserId),
+    {
+      ...fromProfile,
+      createdAt: serverTimestamp()
+    },
+    { merge: true }
+  );
+}
+
+export async function acceptFriendRequest(userId: string | undefined, fromUserId: string | undefined) {
+  if (!db || !userId || !fromUserId || userId === fromUserId) return;
+  const [userProfile, friendProfile] = await Promise.all([friendSnapshot(userId), friendSnapshot(fromUserId)]);
+  if (!userProfile || !friendProfile) throw new Error("User was not found.");
+  await Promise.all([
+    setDoc(doc(db, "users", userId, "friends", fromUserId), { ...friendProfile, createdAt: serverTimestamp() }, { merge: true }),
+    setDoc(doc(db, "users", fromUserId, "friends", userId), { ...userProfile, createdAt: serverTimestamp() }, { merge: true }),
+    deleteDoc(doc(db, "users", userId, "friendRequests", fromUserId)),
+    deleteDoc(doc(db, "users", fromUserId, "friendRequests", userId))
+  ]);
+}
+
+export async function declineFriendRequest(userId: string | undefined, fromUserId: string | undefined) {
+  if (!db || !userId || !fromUserId) return;
+  await deleteDoc(doc(db, "users", userId, "friendRequests", fromUserId));
+}
+
+export async function sendGameInvite(input: {
+  fromUserId?: string;
+  toUserId?: string;
+  roomId: string;
+  link: string;
+}) {
+  if (!db || !input.fromUserId || !input.toUserId || input.fromUserId === input.toUserId) return;
+  const fromProfile = await friendSnapshot(input.fromUserId);
+  if (!fromProfile) throw new Error("User was not found.");
+  const inviteRef = doc(db, "users", input.toUserId, "gameInvites", input.roomId);
+  await setDoc(
+    inviteRef,
+    {
+      roomId: input.roomId,
+      fromUserId: input.fromUserId,
+      fromName: fromProfile.name,
+      fromNick: fromProfile.nick,
+      link: input.link,
+      status: "pending",
+      createdAt: serverTimestamp()
+    },
+    { merge: true }
+  );
+}
+
+export async function dismissGameInvite(userId: string | undefined, inviteId: string | undefined) {
+  if (!db || !userId || !inviteId) return;
+  await deleteDoc(doc(db, "users", userId, "gameInvites", inviteId));
+}
+
+export async function sendChatMessage(input: {
+  fromUserId?: string;
+  toUserId?: string;
+  senderName: string;
+  text: string;
+}) {
+  if (!db || !input.fromUserId || !input.toUserId) return;
+  const text = input.text.trim();
+  if (!text) return;
+  const threadId = chatThreadId(input.fromUserId, input.toUserId);
+  await setDoc(
+    doc(db, "chats", threadId),
+    {
+      participants: [input.fromUserId, input.toUserId],
+      updatedAt: serverTimestamp()
+    },
+    { merge: true }
+  );
+  await addDoc(collection(db, "chats", threadId, "messages"), {
+    senderId: input.fromUserId,
+    senderName: input.senderName,
+    text: text.slice(0, 1000),
+    createdAt: serverTimestamp()
+  });
 }
 
 export async function markPro(userId?: string, stripe?: { customerId?: string; subscriptionId?: string }) {

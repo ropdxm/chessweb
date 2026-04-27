@@ -317,7 +317,8 @@ wss.on("connection", (socket: Client) => {
       socket.timeControl = parseTimeControl(message.timeControl);
 
       if (message.type === "create-room") {
-        const id = makeRoomId();
+        const requestedId = message.roomId?.trim().toUpperCase();
+        const id = requestedId && !rooms.has(requestedId) ? requestedId : makeRoomId();
         const room = makeRoom(id, { w: socket }, socket.timeControl);
         socket.roomId = id;
         socket.color = "w";

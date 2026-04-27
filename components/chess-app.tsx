@@ -5,6 +5,8 @@ import { Chess, type Square } from "chess.js";
 import {
   Bot,
   BrainCircuit,
+  Check,
+  Copy,
   Link as LinkIcon,
   LogIn,
   RotateCcw,
@@ -12,6 +14,7 @@ import {
   Search,
   Maximize2,
   Swords,
+  UserPlus,
   Users
 } from "lucide-react";
 import Link from "next/link";
@@ -26,14 +29,25 @@ import {
   signInGoogle,
   signOutUser,
   markPieceStylePurchased,
+  acceptFriendRequest,
+  declineFriendRequest,
+  dismissGameInvite,
+  searchUsersByNick,
+  sendGameInvite,
+  sendFriendRequest,
   setUserPieceStyle,
+  setUserNick,
   setUserLanguage,
   updateLeaderboard,
   upsertUserProfile,
   useFirebaseUser,
+  useFriendRequests,
+  useFriends,
+  useGameInvites,
   useLeaderboard,
   useUserProfile,
   useSavedGames,
+  type UserSearchResult,
   type SavedMove
 } from "@/lib/firebase";
 import { createStockfish, type StockfishLine } from "@/lib/stockfish";
@@ -68,6 +82,7 @@ const pieceStyleLabels: Record<PieceStyle, string> = {
 };
 const paidPieceStyles = ["alpha", "merida", "california", "cardinal", "pixel"] as const;
 type PaidPieceStyle = (typeof paidPieceStyles)[number];
+const profileGamesPerPage = 7;
 const pieceNames: Record<string, string> = {
   k: "KING",
   q: "QUEEN",
@@ -424,11 +439,21 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   const [resultDialog, setResultDialog] = useState<{ title: string; body: string; delta: number } | null>(null);
   const [gameReplayPly, setGameReplayPly] = useState<Record<string, number>>({});
   const [expandedGameId, setExpandedGameId] = useState<string | null>(null);
+  const [savedGamesPage, setSavedGamesPage] = useState(0);
+  const [nickInput, setNickInput] = useState("");
+  const [friendSearch, setFriendSearch] = useState("");
+  const [directFriendInput, setDirectFriendInput] = useState("");
+  const [friendResults, setFriendResults] = useState<UserSearchResult[]>([]);
+  const [friendBusy, setFriendBusy] = useState(false);
   const analysisRequestedRef = useRef(false);
   const engineRef = useRef<ReturnType<typeof createStockfish> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const savedGamesTopRef = useRef<HTMLDivElement | null>(null);
   const { user, loading } = useFirebaseUser();
   const profile = useUserProfile(user?.uid);
+  const friends = useFriends(user?.uid);
+  const friendRequests = useFriendRequests(user?.uid);
+  const gameInvites = useGameInvites(user?.uid);
   const leaderboard = useLeaderboard();
   const savedGames = useSavedGames(user?.uid);
   const activePlayerColor = mode === "online" ? playerColor : mode === "ai" ? aiPlayerColor : "w";
@@ -474,10 +499,21 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   }, [city, user]);
 
   useEffect(() => {
+    if (profile?.nick) setNickInput(profile.nick);
+  }, [profile?.nick]);
+
+  useEffect(() => {
     if (!user || view !== "profile") return;
     const params = new URLSearchParams(window.location.search);
     const checkout = params.get("checkout");
     const style = params.get("pieceStyle");
+    const friend = params.get("friend");
+    if (friend && friend !== user.uid) {
+      void sendFriendRequest(user.uid, friend)
+        .then(() => setNotice("Friend request sent."))
+        .catch((error) => setNotice(error instanceof Error ? error.message : "Could not send friend request."))
+        .finally(() => window.history.replaceState({}, "", "/profile"));
+    }
     const normalizedStyle = normalizePieceStyle(style || undefined);
     if (checkout === "style-success" && isPaidPieceStyle(normalizedStyle)) {
       void markPieceStylePurchased(user.uid, normalizedStyle);
@@ -643,10 +679,10 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
     };
   }
 
-  function createRoom() {
+  function createRoom(requestedRoomId?: string) {
     setOnlineGameKind("friend");
     setMatchmaking(false);
-    connectSocket((socket) => socket.send(JSON.stringify({ type: "create-room", ...socketIdentity() })));
+    connectSocket((socket) => socket.send(JSON.stringify({ type: "create-room", roomId: requestedRoomId, ...socketIdentity() })));
   }
 
   function joinRoom(id = joinCode.trim()) {
@@ -794,6 +830,100 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
     setReviewPly(next === moveRecords.length ? null : next);
   }
 
+  function changeSavedGamesPage(page: number) {
+    setSavedGamesPage(Math.max(0, Math.min(savedGamesPageCount - 1, page)));
+    setExpandedGameId(null);
+    window.requestAnimationFrame(() => {
+      savedGamesTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  const friendInviteLink = typeof window !== "undefined" && user ? `${window.location.origin}/profile?friend=${user.uid}` : "";
+
+  async function copyFriendInviteLink() {
+    if (!friendInviteLink) return;
+    try {
+      await navigator.clipboard?.writeText(friendInviteLink);
+      setNotice("Friend invite link copied.");
+    } catch {
+      setNotice("Could not copy the invite link.");
+    }
+  }
+
+  async function runFriendSearch() {
+    setFriendBusy(true);
+    try {
+      const results = await searchUsersByNick(friendSearch, user?.uid);
+      setFriendResults(results);
+      if (!results.length) setNotice("No users found for that nick.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not search users.");
+    } finally {
+      setFriendBusy(false);
+    }
+  }
+
+  async function requestFriend(targetUserId: string | undefined) {
+    if (!user || !targetUserId) return;
+    setFriendBusy(true);
+    try {
+      await sendFriendRequest(user.uid, targetUserId);
+      setNotice("Friend request sent.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not send friend request.");
+    } finally {
+      setFriendBusy(false);
+    }
+  }
+
+  async function requestDirectFriend() {
+    if (!user) return;
+    const value = directFriendInput.trim();
+    if (!value) return;
+    setFriendBusy(true);
+    try {
+      let target = value;
+      const parsed = new URL(value);
+      target = parsed.searchParams.get("friend") || value;
+      await sendFriendRequest(user.uid, target);
+      setNotice("Friend request sent.");
+    } catch {
+      try {
+        const results = await searchUsersByNick(value, user.uid);
+        const exact = results.find((result) => result.nick?.toLowerCase() === value.replace(/^@+/, "").toLowerCase());
+        await sendFriendRequest(user.uid, exact?.id || value);
+        setNotice("Friend request sent.");
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Could not send friend request.");
+      }
+    } finally {
+      setFriendBusy(false);
+    }
+    setDirectFriendInput("");
+  }
+
+  async function saveNick() {
+    if (!user) return;
+    await setUserNick(user.uid, nickInput);
+    setNotice("Nick updated.");
+  }
+
+  function makeInviteRoomId() {
+    return Math.random().toString(36).slice(2, 8).toUpperCase();
+  }
+
+  async function inviteFriendToPlay(friendId: string) {
+    if (!user || typeof window === "undefined") return;
+    const room = makeInviteRoomId();
+    const link = `${window.location.origin}/play/friend?room=${room}`;
+    try {
+      await sendGameInvite({ fromUserId: user.uid, toUserId: friendId, roomId: room, link });
+      router.push(`/play/friend?hostRoom=${room}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not send play invite.");
+    }
+  }
+
   const status = onlineResult || classifyResult(game);
   const shareUrl = typeof window !== "undefined" && roomId ? `${window.location.origin}?room=${roomId}` : "";
   const currentReviewIndex = reviewIndex(reviewPly, moveRecords.length);
@@ -805,10 +935,26 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   const bottomPlayer = activePlayerColor === "b" ? { name: blackPlayerName, color: t.black, side: "b" as const } : { name: whitePlayerName, color: t.white, side: "w" as const };
   const topClock = activePlayerColor === "b" ? displayedClocks.w : displayedClocks.b;
   const bottomClock = activePlayerColor === "b" ? displayedClocks.b : displayedClocks.w;
+  const savedGamesPageCount = Math.max(1, Math.ceil(savedGames.length / profileGamesPerPage));
+  const savedGamesStart = savedGamesPage * profileGamesPerPage;
+  const paginatedSavedGames = useMemo(
+    () => savedGames.slice(savedGamesStart, savedGamesStart + profileGamesPerPage),
+    [savedGames, savedGamesStart]
+  );
+  const savedGamesEnd = Math.min(savedGamesStart + paginatedSavedGames.length, savedGames.length);
+
+  useEffect(() => {
+    setSavedGamesPage((page) => Math.min(page, savedGamesPageCount - 1));
+  }, [savedGamesPageCount]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const room = params.get("room");
+    const hostRoom = params.get("hostRoom");
+    if (hostRoom) {
+      createRoom(hostRoom);
+      return;
+    }
     if (room) {
       setJoinCode(room);
       joinRoom(room);
@@ -893,6 +1039,15 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                   <div className="space-y-1">
                     <div className="text-sm text-muted-foreground">{t.email}</div>
                     <div className="break-words font-semibold">{user.email || "Anonymous account"}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-sm text-muted-foreground">Nick</div>
+                    <div className="flex gap-2">
+                      <Input value={nickInput} onChange={(event) => setNickInput(event.target.value)} placeholder="your-nick" />
+                      <Button variant="outline" onClick={() => void saveNick()} disabled={!nickInput.trim()}>
+                        Save
+                      </Button>
+                    </div>
                   </div>
                   <div className="space-y-1">
                     <div className="text-sm text-muted-foreground">{t.city}</div>
@@ -1002,85 +1157,279 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
             </CardContent>
           </Card>
 
+          <div className="space-y-5">
+            <Card>
+              <CardHeader>
+                <CardTitle>Friends</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-2 rounded-md bg-muted p-3 text-sm">
+                  <div className="font-semibold">Invite link</div>
+                  <div className="break-all text-xs text-muted-foreground">{friendInviteLink}</div>
+                  <Button variant="outline" size="sm" onClick={() => void copyFriendInviteLink()} disabled={!friendInviteLink}>
+                    <Copy className="h-4 w-4" /> Copy link
+                  </Button>
+                </div>
+
+                <div className="grid gap-2">
+                  <div className="text-sm font-semibold">Add directly</div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      value={directFriendInput}
+                      onChange={(event) => setDirectFriendInput(event.target.value)}
+                      placeholder="Paste invite link, user id, or exact nick"
+                    />
+                    <Button onClick={() => void requestDirectFriend()} disabled={friendBusy || !directFriendInput.trim()}>
+                      <UserPlus className="h-4 w-4" /> Add
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="grid gap-2">
+                  <div className="text-sm font-semibold">Search by nick</div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      value={friendSearch}
+                      onChange={(event) => setFriendSearch(event.target.value)}
+                      placeholder="Search nick"
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") void runFriendSearch();
+                      }}
+                    />
+                    <Button variant="outline" onClick={() => void runFriendSearch()} disabled={friendBusy || friendSearch.trim().length < 2}>
+                      <Search className="h-4 w-4" /> Search
+                    </Button>
+                  </div>
+                  {friendResults.length ? (
+                    <div className="grid gap-2">
+                      {friendResults.map((result) => (
+                        <div key={result.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background p-3 text-sm">
+                          <div>
+                            <div className="font-semibold">{result.name}</div>
+                            <div className="text-muted-foreground">
+                              @{result.nick || "player"} {result.city ? `- ${result.city}` : ""}
+                            </div>
+                          </div>
+                          <Button size="sm" onClick={() => void requestFriend(result.id)} disabled={friendBusy}>
+                            <UserPlus className="h-4 w-4" /> Add
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="grid gap-2">
+                  <div className="text-sm font-semibold">Incoming requests</div>
+                  {friendRequests.length ? (
+                    friendRequests.map((request) => (
+                      <div key={request.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background p-3 text-sm">
+                        <div>
+                          <div className="font-semibold">{request.name}</div>
+                          <div className="text-muted-foreground">@{request.nick || "player"}</div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            size="icon"
+                            title="Accept"
+                            onClick={() =>
+                              void acceptFriendRequest(user?.uid, request.fromUserId)
+                                .then(() => setNotice("Friend added."))
+                                .catch((error) => setNotice(error instanceof Error ? error.message : "Could not accept request."))
+                            }
+                          >
+                            <Check className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            title="Decline"
+                            onClick={() => void declineFriendRequest(user?.uid, request.fromUserId)}
+                          >
+                            <span className="text-base leading-none">x</span>
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No pending friend requests.</p>
+                  )}
+                </div>
+
+                <div className="grid gap-2">
+                  <div className="text-sm font-semibold">Play invites</div>
+                  {gameInvites.length ? (
+                    gameInvites.map((invite) => (
+                      <div key={invite.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background p-3 text-sm">
+                        <div>
+                          <div className="font-semibold">{invite.fromName}</div>
+                          <div className="text-muted-foreground">@{invite.fromNick || "player"} invited you to play</div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button size="sm" asChild>
+                            <Link href={invite.link}>Join</Link>
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => void dismissGameInvite(user?.uid, invite.id)}>
+                            Dismiss
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No pending play invites.</p>
+                  )}
+                </div>
+
+                <div className="grid gap-2">
+                  <div className="text-sm font-semibold">Your friends</div>
+                  {friends.length ? (
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {friends.map((friend) => (
+                        <div key={friend.id} className="rounded-md border bg-background p-3 text-sm">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="font-semibold">{friend.name}</div>
+                              <div className="text-muted-foreground">@{friend.nick || "player"}</div>
+                              <Badge className="mt-2">{friend.score || 0}</Badge>
+                            </div>
+                            <div className="flex flex-col gap-2">
+                              <Button size="sm" onClick={() => void inviteFriendToPlay(friend.id)}>
+                                <Swords className="h-4 w-4" /> Invite
+                              </Button>
+                              <Button variant="outline" size="sm" asChild>
+                                <Link href={`/chat?friend=${friend.id}`}>Chat</Link>
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No friends added yet.</p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
           <Card>
+            <div ref={savedGamesTopRef} className="scroll-mt-5" />
             <CardHeader>
               <CardTitle>{t.allGames}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               {savedGames.length ? (
-                savedGames.map((saved) => {
-                  const fens = saved.fenHistory?.split("\n").filter(Boolean) || [new Chess().fen()];
-                  const currentPly = Math.min(gameReplayPly[saved.id] ?? 0, fens.length - 1);
-                  const currentFen = fens[currentPly] || fens[0];
-                  const expanded = expandedGameId === saved.id;
-                  return (
-                    <div
-                      key={saved.id}
-                      className={cn(
-                        "grid gap-4 rounded-md border bg-background p-4 text-sm",
-                        expanded ? "lg:grid-cols-[minmax(320px,720px)_1fr]" : "md:grid-cols-[220px_1fr]"
-                      )}
-                    >
-                      <MiniBoard fen={currentFen} large={expanded} pieceStyle={pieceStyle} />
-                      <div className="space-y-3">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <div className="font-semibold">{saved.opponent}</div>
-                            <div className="text-muted-foreground">{translatedResult(saved.result, t)}</div>
+                <>
+                  {paginatedSavedGames.map((saved) => {
+                    const fens = saved.fenHistory?.split("\n").filter(Boolean) || [new Chess().fen()];
+                    const currentPly = Math.min(gameReplayPly[saved.id] ?? 0, fens.length - 1);
+                    const currentFen = fens[currentPly] || fens[0];
+                    const expanded = expandedGameId === saved.id;
+                    return (
+                      <div
+                        key={saved.id}
+                        className={cn(
+                          "grid gap-4 rounded-md border bg-background p-4 text-sm",
+                          expanded ? "lg:grid-cols-[minmax(320px,720px)_1fr]" : "md:grid-cols-[220px_1fr]"
+                        )}
+                      >
+                        <MiniBoard fen={currentFen} large={expanded} pieceStyle={pieceStyle} />
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <div className="font-semibold">{saved.opponent}</div>
+                              <div className="text-muted-foreground">{translatedResult(saved.result, t)}</div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Badge>{saved.scoreDelta >= 0 ? "+" : ""}{saved.scoreDelta}</Badge>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                title={expanded ? t.useCompactBoard : t.useLargeBoard}
+                                onClick={() => setExpandedGameId(expanded ? null : saved.id)}
+                              >
+                                <Maximize2 className="h-4 w-4" />
+                              </Button>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Badge>{saved.scoreDelta >= 0 ? "+" : ""}{saved.scoreDelta}</Badge>
+                          <div className="flex flex-wrap items-center gap-2">
                             <Button
                               variant="outline"
-                              size="icon"
-                            title={expanded ? t.useCompactBoard : t.useLargeBoard}
-                              onClick={() => setExpandedGameId(expanded ? null : saved.id)}
+                              size="sm"
+                              onClick={() =>
+                                setGameReplayPly((state) => ({ ...state, [saved.id]: Math.max(0, currentPly - 1) }))
+                              }
+                              disabled={currentPly === 0}
                             >
-                              <Maximize2 className="h-4 w-4" />
+                              {t.back}
+                            </Button>
+                            <Badge>
+                              {currentPly} / {Math.max(0, fens.length - 1)}
+                            </Badge>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                setGameReplayPly((state) => ({ ...state, [saved.id]: Math.min(fens.length - 1, currentPly + 1) }))
+                              }
+                              disabled={currentPly >= fens.length - 1}
+                            >
+                              {t.forward}
                             </Button>
                           </div>
+                          <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
+                            {saved.pgn || t.noPgn}
+                          </div>
+                          <details>
+                            <summary className="cursor-pointer text-xs font-semibold text-muted-foreground">{t.currentFen}</summary>
+                            <pre className="mt-2 max-h-24 overflow-auto rounded-md bg-muted p-3 text-xs">{currentFen}</pre>
+                          </details>
                         </div>
-                        <div className="flex flex-wrap items-center gap-2">
+                      </div>
+                    );
+                  })}
+                  {savedGamesPageCount > 1 ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 text-sm text-muted-foreground">
+                      <span>
+                        {savedGamesStart + 1}-{savedGamesEnd} / {savedGames.length}
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => changeSavedGamesPage(savedGamesPage - 1)}
+                          disabled={savedGamesPage === 0}
+                        >
+                          {t.back}
+                        </Button>
+                        {Array.from({ length: savedGamesPageCount }, (_, page) => (
                           <Button
-                            variant="outline"
+                            key={page}
+                            variant={savedGamesPage === page ? "default" : "outline"}
                             size="sm"
-                            onClick={() =>
-                              setGameReplayPly((state) => ({ ...state, [saved.id]: Math.max(0, currentPly - 1) }))
-                            }
-                            disabled={currentPly === 0}
+                            className="min-w-9 px-2"
+                            onClick={() => changeSavedGamesPage(page)}
                           >
-                            {t.back}
+                            {page + 1}
                           </Button>
-                          <Badge>
-                            {currentPly} / {Math.max(0, fens.length - 1)}
-                          </Badge>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() =>
-                              setGameReplayPly((state) => ({ ...state, [saved.id]: Math.min(fens.length - 1, currentPly + 1) }))
-                            }
-                            disabled={currentPly >= fens.length - 1}
-                          >
-                            {t.forward}
-                          </Button>
-                        </div>
-                        <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
-                          {saved.pgn || t.noPgn}
-                        </div>
-                        <details>
-                          <summary className="cursor-pointer text-xs font-semibold text-muted-foreground">{t.currentFen}</summary>
-                          <pre className="mt-2 max-h-24 overflow-auto rounded-md bg-muted p-3 text-xs">{currentFen}</pre>
-                        </details>
+                        ))}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => changeSavedGamesPage(savedGamesPage + 1)}
+                          disabled={savedGamesPage >= savedGamesPageCount - 1}
+                        >
+                          {t.forward}
+                        </Button>
                       </div>
                     </div>
-                  );
-                })
+                  ) : null}
+                </>
               ) : (
                 <p className="text-sm text-muted-foreground">{t.noSavedGames}</p>
               )}
             </CardContent>
           </Card>
+          </div>
         </section>
       ) : (
       <section className="mx-auto grid max-w-7xl gap-5 px-4 py-5 lg:grid-cols-[minmax(320px,720px)_1fr]">
@@ -1299,7 +1648,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
               {onlineGameKind === "friend" ? (
                 <div className="space-y-3">
                   {!roomId ? (
-                    <Button className="w-full" variant="outline" onClick={createRoom}>
+                    <Button className="w-full" variant="outline" onClick={() => createRoom()}>
                       <LinkIcon className="h-4 w-4" /> {t.createRoom}
                     </Button>
                   ) : null}
