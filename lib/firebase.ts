@@ -353,6 +353,28 @@ export function useFriendRequests(userId?: string) {
   return requests;
 }
 
+export function useOutgoingFriendRequests(userId?: string) {
+  const [requests, setRequests] = useState<FriendRequest[]>([]);
+
+  useEffect(() => {
+    if (!db || !userId) {
+      setRequests([]);
+      return;
+    }
+    return onSnapshot(collection(db, "users", userId, "outgoingFriendRequests"), (snapshot) => {
+      setRequests(
+        snapshot.docs.map((entry) => ({
+          id: entry.id,
+          fromUserId: userId,
+          ...(entry.data() as Omit<FriendRequest, "id" | "fromUserId">)
+        }))
+      );
+    });
+  }, [userId]);
+
+  return requests;
+}
+
 export function useGameInvites(userId?: string) {
   const [invites, setInvites] = useState<GameInvite[]>([]);
 
@@ -434,6 +456,14 @@ export async function sendFriendRequest(fromUserId: string | undefined, toUserId
     },
     { merge: true }
   );
+  await setDoc(
+    doc(db, "users", fromUserId, "outgoingFriendRequests", toUserId),
+    {
+      ...toProfile,
+      createdAt: serverTimestamp()
+    },
+    { merge: true }
+  );
 }
 
 export async function acceptFriendRequest(userId: string | undefined, fromUserId: string | undefined) {
@@ -444,13 +474,18 @@ export async function acceptFriendRequest(userId: string | undefined, fromUserId
     setDoc(doc(db, "users", userId, "friends", fromUserId), { ...friendProfile, createdAt: serverTimestamp() }, { merge: true }),
     setDoc(doc(db, "users", fromUserId, "friends", userId), { ...userProfile, createdAt: serverTimestamp() }, { merge: true }),
     deleteDoc(doc(db, "users", userId, "friendRequests", fromUserId)),
-    deleteDoc(doc(db, "users", fromUserId, "friendRequests", userId))
+    deleteDoc(doc(db, "users", fromUserId, "friendRequests", userId)),
+    deleteDoc(doc(db, "users", fromUserId, "outgoingFriendRequests", userId)),
+    deleteDoc(doc(db, "users", userId, "outgoingFriendRequests", fromUserId))
   ]);
 }
 
 export async function declineFriendRequest(userId: string | undefined, fromUserId: string | undefined) {
   if (!db || !userId || !fromUserId) return;
-  await deleteDoc(doc(db, "users", userId, "friendRequests", fromUserId));
+  await Promise.all([
+    deleteDoc(doc(db, "users", userId, "friendRequests", fromUserId)),
+    deleteDoc(doc(db, "users", fromUserId, "outgoingFriendRequests", userId))
+  ]);
 }
 
 export async function sendGameInvite(input: {

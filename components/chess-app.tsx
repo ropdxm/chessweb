@@ -44,6 +44,7 @@ import {
   useFriendRequests,
   useFriends,
   useGameInvites,
+  useOutgoingFriendRequests,
   useLeaderboard,
   useUserProfile,
   useSavedGames,
@@ -445,6 +446,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   const [directFriendInput, setDirectFriendInput] = useState("");
   const [friendResults, setFriendResults] = useState<UserSearchResult[]>([]);
   const [friendBusy, setFriendBusy] = useState(false);
+  const [showAllPieceStyles, setShowAllPieceStyles] = useState(false);
   const analysisRequestedRef = useRef(false);
   const engineRef = useRef<ReturnType<typeof createStockfish> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -453,6 +455,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   const profile = useUserProfile(user?.uid);
   const friends = useFriends(user?.uid);
   const friendRequests = useFriendRequests(user?.uid);
+  const outgoingFriendRequests = useOutgoingFriendRequests(user?.uid);
   const gameInvites = useGameInvites(user?.uid);
   const leaderboard = useLeaderboard();
   const savedGames = useSavedGames(user?.uid);
@@ -468,6 +471,13 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   const activeLanguage: Language = isPro && (profile?.language === "kk" || profile?.language === "ru" || profile?.language === "fr") ? profile.language : "en";
   const t = translations[activeLanguage];
   const playerName = user?.displayName || user?.email || t.you;
+  const friendIds = useMemo(() => new Set(friends.map((friend) => friend.id)), [friends]);
+  const outgoingFriendRequestIds = useMemo(
+    () => new Set(outgoingFriendRequests.map((request) => request.id)),
+    [outgoingFriendRequests]
+  );
+  const pieceStyleOptions = ["noto", "cburnett", "alpha", "merida", "california", "cardinal", "pixel"] as const;
+  const visiblePieceStyleOptions = showAllPieceStyles ? pieceStyleOptions : pieceStyleOptions.slice(0, 2);
 
   useEffect(() => {
     if (!coachText) setCoachText(t.coachReady);
@@ -1061,7 +1071,17 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                   </Button>
                   <div className="space-y-2">
                     <div className="text-sm font-semibold">{t.language}</div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <select
+                      className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
+                      value={activeLanguage}
+                      onChange={(event) => void setUserLanguage(user.uid, event.target.value as Language)}
+                    >
+                      <option value="en">English</option>
+                      <option value="kk" disabled={!isPro}>Kazakh</option>
+                      <option value="ru" disabled={!isPro}>Russian</option>
+                      <option value="fr" disabled={!isPro}>French</option>
+                    </select>
+                    <div className="hidden">
                       {([
                         ["en", "English"],
                         ["kk", "Қазақша"],
@@ -1084,7 +1104,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                   <div className="space-y-2">
                     <div className="text-sm font-semibold">{t.pieceStyle}</div>
                     <div className="grid grid-cols-2 gap-2">
-                      {(["noto", "cburnett", "alpha", "merida", "california", "cardinal", "pixel"] as const).map((style) => {
+                      {visiblePieceStyleOptions.map((style) => {
                         const label = pieceStyleLabels[style];
                         const proLocked = style === "cburnett" && !isPro;
                         const paidStyle = isPaidPieceStyle(style) ? style : null;
@@ -1099,6 +1119,12 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                               selectedStyle ? "border-primary ring-1 ring-primary" : "border-border"
                             )}
                           >
+                            {paidStyle ? (
+                              <div className="mb-2 flex items-center justify-between gap-2">
+                                <span className="text-xs font-semibold">{label}</span>
+                                <Badge className="bg-accent text-accent-foreground">$2</Badge>
+                              </div>
+                            ) : null}
                             <div className="mb-2 grid grid-cols-4 gap-1 rounded-md bg-muted p-1">
                               {([
                                 ["w", "k"],
@@ -1124,7 +1150,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                                     : undefined
                                 }
                               >
-                                {t.buyStyle.replace("{style}", label)}
+                                Buy {label} <span className="font-bold text-primary">$2</span>
                               </Button>
                             ) : (
                               <Button
@@ -1141,6 +1167,9 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                         );
                       })}
                     </div>
+                    <Button className="w-full" variant="ghost" size="sm" onClick={() => setShowAllPieceStyles((value) => !value)}>
+                      {showAllPieceStyles ? "Show fewer styles" : "Show more styles"}
+                    </Button>
                     {!isPro ? <p className="text-xs text-muted-foreground">{t.proStylesLocked}</p> : null}
                     <p className="text-xs text-muted-foreground">{t.paidStylesNote}</p>
                     <p className="text-xs text-muted-foreground">{t.assetNote}</p>
@@ -1202,19 +1231,27 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                   </div>
                   {friendResults.length ? (
                     <div className="grid gap-2">
-                      {friendResults.map((result) => (
-                        <div key={result.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background p-3 text-sm">
-                          <div>
-                            <div className="font-semibold">{result.name}</div>
-                            <div className="text-muted-foreground">
-                              @{result.nick || "player"} {result.city ? `- ${result.city}` : ""}
+                      {friendResults.map((result) => {
+                        const alreadyFriend = friendIds.has(result.id);
+                        const requestPending = outgoingFriendRequestIds.has(result.id);
+                        return (
+                          <div key={result.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background p-3 text-sm">
+                            <div>
+                              <div className="font-semibold">{result.name}</div>
+                              <div className="text-muted-foreground">
+                                @{result.nick || "player"} {result.city ? `- ${result.city}` : ""}
+                              </div>
                             </div>
+                            <Button
+                              size="sm"
+                              onClick={() => void requestFriend(result.id)}
+                              disabled={friendBusy || alreadyFriend || requestPending}
+                            >
+                              <UserPlus className="h-4 w-4" /> {alreadyFriend ? "Friends" : requestPending ? "Pending" : "Add"}
+                            </Button>
                           </div>
-                          <Button size="sm" onClick={() => void requestFriend(result.id)} disabled={friendBusy}>
-                            <UserPlus className="h-4 w-4" /> Add
-                          </Button>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : null}
                 </div>
