@@ -583,14 +583,6 @@ export async function sendChatMessage(input: {
   const text = input.text.trim();
   if (!text && !input.imageFile) return;
   const threadId = chatThreadId(input.fromUserId, input.toUserId);
-  let imageUrl = "";
-  if (input.imageFile) {
-    if (!storage) throw new Error("Firebase Storage is not configured.");
-    const blob = await resizeImageToSquare(input.imageFile, 200);
-    const imageRef = storageRef(storage, `chats/${threadId}/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`);
-    await uploadBytes(imageRef, blob, { contentType: "image/jpeg" });
-    imageUrl = await getDownloadURL(imageRef);
-  }
   await setDoc(
     doc(db, "chats", threadId),
     {
@@ -599,6 +591,14 @@ export async function sendChatMessage(input: {
     },
     { merge: true }
   );
+  let imageUrl = "";
+  if (input.imageFile) {
+    if (!storage) throw new Error("Firebase Storage is not configured.");
+    const blob = await resizeImageToSquare(input.imageFile, 200);
+    const imageRef = storageRef(storage, `chats/${threadId}/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`);
+    await uploadBytes(imageRef, blob, { contentType: "image/jpeg" });
+    imageUrl = await getDownloadURL(imageRef);
+  }
   await addDoc(collection(db, "chats", threadId, "messages"), {
     senderId: input.fromUserId,
     senderName: input.senderName,

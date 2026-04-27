@@ -452,6 +452,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   const [friendBusy, setFriendBusy] = useState(false);
   const [showAllPieceStyles, setShowAllPieceStyles] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
+  const [profileImageOpen, setProfileImageOpen] = useState(false);
   const analysisRequestedRef = useRef(false);
   const engineRef = useRef<ReturnType<typeof createStockfish> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -1053,6 +1054,34 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
       ) : null}
       {view === "profile" ? (
         <section className="mx-auto grid max-w-7xl gap-5 px-4 py-5 lg:grid-cols-[360px_1fr]">
+          {profileImageOpen ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4" onClick={() => setProfileImageOpen(false)}>
+              <div className="w-full max-w-sm rounded-lg border bg-card p-5 text-card-foreground shadow-xl" onClick={(event) => event.stopPropagation()}>
+                <div className="mx-auto grid h-[200px] w-[200px] place-items-center overflow-hidden rounded-md border bg-muted">
+                  {profile?.avatarUrl ? (
+                    <img src={profile.avatarUrl} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <Users className="h-12 w-12 text-muted-foreground" />
+                  )}
+                </div>
+                <div className="mt-4 grid gap-2">
+                  <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border bg-background px-4 text-sm font-semibold transition hover:bg-muted">
+                    <Upload className="h-4 w-4" /> {avatarUploading ? "Uploading..." : "Upload new image"}
+                    <input
+                      className="hidden"
+                      type="file"
+                      accept="image/*"
+                      disabled={avatarUploading}
+                      onChange={(event) => void handleProfileImage(event.target.files?.[0])}
+                    />
+                  </label>
+                  <Button variant="ghost" onClick={() => setProfileImageOpen(false)}>
+                    Close
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
           <Card>
             <CardHeader>
               <CardTitle>{t.profile}</CardTitle>
@@ -1061,25 +1090,21 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
               {user ? (
                 <>
                   <div className="flex items-center gap-3">
-                    <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-md border bg-muted">
+                    <button
+                      type="button"
+                      className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-md border bg-muted transition hover:border-primary"
+                      title="Open profile image"
+                      onClick={() => setProfileImageOpen(true)}
+                    >
                       {profile?.avatarUrl ? (
                         <img src={profile.avatarUrl} alt="" className="h-full w-full object-cover" />
                       ) : (
                         <Users className="h-6 w-6 text-muted-foreground" />
                       )}
-                    </div>
+                    </button>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold">Profile image</div>
-                      <label className="mt-2 inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border bg-background px-3 text-sm font-semibold transition hover:bg-muted">
-                        <Upload className="h-4 w-4" /> {avatarUploading ? "Uploading..." : "Upload"}
-                        <input
-                          className="hidden"
-                          type="file"
-                          accept="image/*"
-                          disabled={avatarUploading}
-                          onChange={(event) => void handleProfileImage(event.target.files?.[0])}
-                        />
-                      </label>
+                      <p className="text-xs text-muted-foreground">Press the image to view or update it.</p>
                     </div>
                   </div>
                   <div className="space-y-1">
