@@ -316,6 +316,12 @@ wss.on("connection", (socket: Client) => {
       }
       socket.timeControl = parseTimeControl(message.timeControl);
 
+      if (message.type === "identify") {
+        const room = socket.roomId ? rooms.get(socket.roomId) : null;
+        if (room) broadcast(room);
+        return;
+      }
+
       if (message.type === "create-room") {
         const requestedId = message.roomId?.trim().toUpperCase();
         const id = requestedId && !rooms.has(requestedId) ? requestedId : makeRoomId();
@@ -341,7 +347,11 @@ wss.on("connection", (socket: Client) => {
           send(socket, { type: "error", message: "Room not found" });
           return;
         }
-        const color = room.players.b ? "w" : "b";
+        const color = !room.players.w ? "w" : !room.players.b ? "b" : null;
+        if (!color) {
+          send(socket, { type: "error", message: "Room is full" });
+          return;
+        }
         room.players[color] = socket;
         socket.roomId = room.id;
         socket.color = color;

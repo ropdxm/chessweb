@@ -457,6 +457,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   const engineRef = useRef<ReturnType<typeof createStockfish> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const savedGamesTopRef = useRef<HTMLDivElement | null>(null);
+  const handledRoomParamRef = useRef(false);
   const { user, loading } = useFirebaseUser();
   const profile = useUserProfile(user?.uid);
   const friends = useFriends(user?.uid);
@@ -476,7 +477,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   const pieceStyle = canUseProfileStyle ? normalizedProfileStyle : "noto";
   const activeLanguage: Language = isPro && (profile?.language === "kk" || profile?.language === "ru" || profile?.language === "fr") ? profile.language : "en";
   const t = translations[activeLanguage];
-  const playerName = user?.displayName || user?.email || t.you;
+  const playerName = profile?.nick || profile?.name || user?.displayName || user?.email || t.you;
   const friendIds = useMemo(() => new Set(friends.map((friend) => friend.id)), [friends]);
   const outgoingFriendRequestIds = useMemo(
     () => new Set(outgoingFriendRequests.map((request) => request.id)),
@@ -517,6 +518,13 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   useEffect(() => {
     if (profile?.nick) setNickInput(profile.nick);
   }, [profile?.nick]);
+
+  useEffect(() => {
+    if (mode === "online" && roomId) {
+      sendWs({ type: "identify", ...socketIdentity() });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, playerName, roomId, timeControl]);
 
   useEffect(() => {
     if (!user || view !== "profile") return;
@@ -977,14 +985,18 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   }, [savedGamesPageCount]);
 
   useEffect(() => {
+    if (handledRoomParamRef.current) return;
     const params = new URLSearchParams(window.location.search);
     const room = params.get("room");
     const hostRoom = params.get("hostRoom");
     if (hostRoom) {
+      handledRoomParamRef.current = true;
       createRoom(hostRoom);
+      window.history.replaceState({}, "", `/play/friend?room=${hostRoom}`);
       return;
     }
     if (room) {
+      handledRoomParamRef.current = true;
       setJoinCode(room);
       joinRoom(room);
     }
@@ -1236,8 +1248,6 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                       {showAllPieceStyles ? "Show fewer styles" : "Show more styles"}
                     </Button>
                     {!isPro ? <p className="text-xs text-muted-foreground">{t.proStylesLocked}</p> : null}
-                    <p className="text-xs text-muted-foreground">{t.paidStylesNote}</p>
-                    <p className="text-xs text-muted-foreground">{t.assetNote}</p>
                   </div>
                 </>
               ) : (
