@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { MessageCircle, Send, Swords, UserRound } from "lucide-react";
+import { ImageIcon, MessageCircle, Send, Swords, UserRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,20 +34,29 @@ function ChatPageContent() {
   );
   const messages = useChatMessages(user?.uid, selectedFriend?.id);
   const [draft, setDraft] = useState("");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login");
   }, [loading, router, user]);
 
   async function sendMessage() {
-    if (!user || !selectedFriend || !draft.trim()) return;
-    await sendChatMessage({
-      fromUserId: user.uid,
-      toUserId: selectedFriend.id,
-      senderName: profile?.name || user.displayName || user.email || "Player",
-      text: draft
-    });
-    setDraft("");
+    if (!user || !selectedFriend || (!draft.trim() && !imageFile) || sending) return;
+    setSending(true);
+    try {
+      await sendChatMessage({
+        fromUserId: user.uid,
+        toUserId: selectedFriend.id,
+        senderName: profile?.name || user.displayName || user.email || "Player",
+        text: draft,
+        imageFile: imageFile || undefined
+      });
+      setDraft("");
+      setImageFile(null);
+    } finally {
+      setSending(false);
+    }
   }
 
   async function inviteSelectedFriend() {
@@ -92,9 +101,14 @@ function ChatPageContent() {
                   asChild
                 >
                   <Link href={`/chat?friend=${friend.id}`}>
-                    <span className="text-left">
-                      <span className="block font-semibold">{friend.name}</span>
-                      <span className="block text-xs opacity-80">@{friend.nick || "player"}</span>
+                      <span className="text-left">
+                      <span className="flex items-center gap-2">
+                        {friend.avatarUrl ? <img src={friend.avatarUrl} alt="" className="h-7 w-7 rounded-md object-cover" /> : null}
+                        <span>
+                          <span className="block font-semibold">{friend.name}</span>
+                          <span className="block text-xs opacity-80">@{friend.nick || "player"}</span>
+                        </span>
+                      </span>
                     </span>
                   </Link>
                 </Button>
@@ -138,7 +152,10 @@ function ChatPageContent() {
                         <div key={message.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
                           <div className={`max-w-[78%] rounded-md px-3 py-2 text-sm ${mine ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
                             <div className="text-xs opacity-75">{message.senderName}</div>
-                            <div className="whitespace-pre-wrap break-words">{message.text}</div>
+                            {message.imageUrl ? (
+                              <img src={message.imageUrl} alt="" className="mt-2 h-[200px] w-[200px] rounded-md object-cover" />
+                            ) : null}
+                            {message.text ? <div className="whitespace-pre-wrap break-words">{message.text}</div> : null}
                           </div>
                         </div>
                       );
@@ -147,6 +164,14 @@ function ChatPageContent() {
                     <p className="text-sm text-muted-foreground">No messages yet.</p>
                   )}
                 </div>
+                {imageFile ? (
+                  <div className="flex items-center justify-between gap-2 rounded-md border bg-background p-2 text-sm">
+                    <span className="truncate">{imageFile.name}</span>
+                    <Button variant="ghost" size="sm" onClick={() => setImageFile(null)}>
+                      Remove
+                    </Button>
+                  </div>
+                ) : null}
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <Input
                     value={draft}
@@ -156,7 +181,11 @@ function ChatPageContent() {
                       if (event.key === "Enter") void sendMessage();
                     }}
                   />
-                  <Button onClick={() => void sendMessage()} disabled={!draft.trim()}>
+                  <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border bg-background px-4 text-sm font-semibold transition hover:bg-muted">
+                    <ImageIcon className="h-4 w-4" /> Image
+                    <input className="hidden" type="file" accept="image/*" onChange={(event) => setImageFile(event.target.files?.[0] || null)} />
+                  </label>
+                  <Button onClick={() => void sendMessage()} disabled={sending || (!draft.trim() && !imageFile)}>
                     <Send className="h-4 w-4" /> Send
                   </Button>
                 </div>

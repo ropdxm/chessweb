@@ -14,6 +14,8 @@ import {
   Search,
   Maximize2,
   Swords,
+  Trash2,
+  Upload,
   UserPlus,
   Users
 } from "lucide-react";
@@ -30,6 +32,7 @@ import {
   signOutUser,
   markPieceStylePurchased,
   acceptFriendRequest,
+  deleteFriend,
   declineFriendRequest,
   dismissGameInvite,
   searchUsersByNick,
@@ -38,6 +41,7 @@ import {
   setUserPieceStyle,
   setUserNick,
   setUserLanguage,
+  uploadProfileImage,
   updateLeaderboard,
   upsertUserProfile,
   useFirebaseUser,
@@ -447,6 +451,7 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
   const [friendResults, setFriendResults] = useState<UserSearchResult[]>([]);
   const [friendBusy, setFriendBusy] = useState(false);
   const [showAllPieceStyles, setShowAllPieceStyles] = useState(false);
+  const [avatarUploading, setAvatarUploading] = useState(false);
   const analysisRequestedRef = useRef(false);
   const engineRef = useRef<ReturnType<typeof createStockfish> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -918,6 +923,19 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
     setNotice("Nick updated.");
   }
 
+  async function handleProfileImage(file?: File) {
+    if (!user || !file) return;
+    setAvatarUploading(true);
+    try {
+      await uploadProfileImage(user.uid, file);
+      setNotice("Profile image updated.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not upload profile image.");
+    } finally {
+      setAvatarUploading(false);
+    }
+  }
+
   function makeInviteRoomId() {
     return Math.random().toString(36).slice(2, 8).toUpperCase();
   }
@@ -1042,6 +1060,28 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
             <CardContent className="space-y-4">
               {user ? (
                 <>
+                  <div className="flex items-center gap-3">
+                    <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-md border bg-muted">
+                      {profile?.avatarUrl ? (
+                        <img src={profile.avatarUrl} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <Users className="h-6 w-6 text-muted-foreground" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold">Profile image</div>
+                      <label className="mt-2 inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border bg-background px-3 text-sm font-semibold transition hover:bg-muted">
+                        <Upload className="h-4 w-4" /> {avatarUploading ? "Uploading..." : "Upload"}
+                        <input
+                          className="hidden"
+                          type="file"
+                          accept="image/*"
+                          disabled={avatarUploading}
+                          onChange={(event) => void handleProfileImage(event.target.files?.[0])}
+                        />
+                      </label>
+                    </div>
+                  </div>
                   <div className="space-y-1">
                     <div className="text-sm text-muted-foreground">{t.name}</div>
                     <div className="font-semibold">{user.displayName || "Guest player"}</div>
@@ -1335,6 +1375,17 @@ export default function ChessApp({ initialMode = "ai", initialView = "play", ini
                               </Button>
                               <Button variant="outline" size="sm" asChild>
                                 <Link href={`/chat?friend=${friend.id}`}>Chat</Link>
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() =>
+                                  void deleteFriend(user?.uid, friend.id)
+                                    .then(() => setNotice("Friend deleted."))
+                                    .catch((error) => setNotice(error instanceof Error ? error.message : "Could not delete friend."))
+                                }
+                              >
+                                <Trash2 className="h-4 w-4" /> Delete
                               </Button>
                             </div>
                           </div>

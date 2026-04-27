@@ -31,6 +31,7 @@ import {
   endAt,
   where
 } from "firebase/firestore";
+import { getDownloadURL, getStorage, ref as storageRef, uploadBytes } from "firebase/storage";
 import { useEffect, useState } from "react";
 
 const firebaseConfig = {
@@ -48,6 +49,7 @@ const app = enabled && !getApps().length ? initializeApp(firebaseConfig) : enabl
 
 export const auth = app ? getAuth(app) : null;
 export const db = app ? getFirestore(app) : null;
+export const storage = app ? getStorage(app) : null;
 export const firebaseEnabled = enabled;
 
 export type LeaderboardPlayer = {
@@ -80,6 +82,7 @@ export type UserProfile = {
   name: string;
   nick?: string;
   nickKey?: string;
+  avatarUrl?: string;
   city: string;
   cityKey: string;
   score?: number;
@@ -95,6 +98,7 @@ export type Friend = {
   id: string;
   name: string;
   nick?: string;
+  avatarUrl?: string;
   city?: string;
   score?: number;
 };
@@ -120,8 +124,36 @@ export type ChatMessage = {
   senderId: string;
   senderName: string;
   text: string;
+  imageUrl?: string;
   createdAt?: { seconds: number };
 };
+
+async function resizeImageToSquare(file: File, size = 200) {
+  const image = new Image();
+  const url = URL.createObjectURL(file);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("Could not load image."));
+      image.src = url;
+    });
+
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not resize image.");
+    const sourceSize = Math.min(image.naturalWidth, image.naturalHeight);
+    const sourceX = (image.naturalWidth - sourceSize) / 2;
+    const sourceY = (image.naturalHeight - sourceSize) / 2;
+    context.drawImage(image, sourceX, sourceY, sourceSize, sourceSize, 0, 0, size, size);
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Could not create image blob."))), "image/jpeg", 0.82);
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 function normalizeNick(value: string) {
   return value.trim().toLowerCase().replace(/^@+/, "");
@@ -214,6 +246,7 @@ export async function upsertUserProfile(user: User, city: string) {
       name: user.displayName || "Guest player",
       nick,
       nickKey: normalizeNick(nick),
+      avatarUrl: existing.exists() ? data?.avatarUrl || "" : "",
       city,
       cityKey: city.toLowerCase(),
       score: existing.exists() ? data?.score || 0 : 0,
@@ -240,6 +273,17 @@ export async function setUserNick(userId: string | undefined, nick: string) {
     },
     { merge: true }
   );
+}
+
+export async function uploadProfileImage(userId: string | undefined, file: File) {
+  if (!db || !storage || !userId) return "";
+  const blob = await resizeImageToSquare(file, 200);
+  const path = `users/${userId}/avatar.jpg`;
+  const imageRef = storageRef(storage, path);
+  await uploadBytes(imageRef, blob, { contentType: "image/jpeg" });
+  const avatarUrl = await getDownloadURL(imageRef);
+  await setDoc(doc(db, "users", userId), { avatarUrl, updatedAt: serverTimestamp() }, { merge: true });
+  return avatarUrl;
 }
 
 export async function saveGameRecord(input: {
@@ -329,6 +373,14 @@ export function useFriends(userId?: string) {
   }, [userId]);
 
   return friends;
+}
+
+export async function deleteFriend(userId: string | undefined, friendId: string | undefined) {
+  if (!db || !userId || !friendId) return;
+  await Promise.all([
+    deleteDoc(doc(db, "users", userId, "friends", friendId)),
+    deleteDoc(doc(db, "users", friendId, "friends", userId))
+  ]);
 }
 
 export function useFriendRequests(userId?: string) {
@@ -424,6 +476,7 @@ export async function searchUsersByNick(input: string, currentUserId?: string) {
         id: entry.id,
         name: data.name || "Guest player",
         nick: data.nick,
+        avatarUrl: data.avatarUrl,
         city: data.city,
         score: data.score || 0
       };
@@ -437,6 +490,7 @@ async function friendSnapshot(userId: string) {
   return {
     name: data.name || "Guest player",
     nick: data.nick,
+    avatarUrl: data.avatarUrl,
     city: data.city,
     score: data.score || 0
   };
@@ -523,11 +577,20 @@ export async function sendChatMessage(input: {
   toUserId?: string;
   senderName: string;
   text: string;
+  imageFile?: File;
 }) {
   if (!db || !input.fromUserId || !input.toUserId) return;
   const text = input.text.trim();
-  if (!text) return;
+  if (!text && !input.imageFile) return;
   const threadId = chatThreadId(input.fromUserId, input.toUserId);
+  let imageUrl = "";
+  if (input.imageFile) {
+    if (!storage) throw new Error("Firebase Storage is not configured.");
+    const blob = await resizeImageToSquare(input.imageFile, 200);
+    const imageRef = storageRef(storage, `chats/${threadId}/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`);
+    await uploadBytes(imageRef, blob, { contentType: "image/jpeg" });
+    imageUrl = await getDownloadURL(imageRef);
+  }
   await setDoc(
     doc(db, "chats", threadId),
     {
@@ -540,6 +603,7 @@ export async function sendChatMessage(input: {
     senderId: input.fromUserId,
     senderName: input.senderName,
     text: text.slice(0, 1000),
+    imageUrl,
     createdAt: serverTimestamp()
   });
 }
